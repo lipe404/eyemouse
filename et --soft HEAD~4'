@@ -1,0 +1,55 @@
+[33mcommit 69d4f0f977ee6150657510742b06512f8665a67a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 10:05:30 2026 -0300
+
+    chore: remove built executable from version control
+    
+    Binary files like executables should not be tracked in git as they can be regenerated from source. This reduces repository size and avoids versioning large binary files.
+
+[33mcommit f8101de333c64ff0493f6a1b54e86b8055ee2635[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 10:03:52 2026 -0300
+
+    chore: add .gitignore to ignore the dist/ directory.
+
+[33mcommit ce9a535e5993e5fb0eff5eddb609d265f884a805[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 10:00:01 2026 -0300
+
+    fix(build): add source path to PyInstaller configuration
+    
+    Include the eye_mouse source directory in the search path to ensure all
+    local modules (blink_detector, calibration, config, etc.) are properly
+    discovered during the build process. This resolves missing module errors
+    when generating the executable.
+
+[33mcommit 83d781e92b771c7bb72aed7dbc136bda3cfe88f9[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 09:46:21 2026 -0300
+
+    feat: add PyInstaller build script and executable generation support
+    
+    - Add build_exe.py script for creating standalone .exe files
+    - Update config.py to support PyInstaller resource paths and user data directory
+    - Modify gaze_tracker.py to use resource path helper for model file loading
+    - Add PyInstaller spec file and update requirements.txt
+    - Update README.md with build instructions for distribution
+
+[33mcommit 44f42e196155f1cf88ec0f78cc900523512167b5[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 09:16:31 2026 -0300
+
+    refactor: improve code readability and formatting
+    
+    - Remove unnecessary comment in smoothing.py
+    - Use consistent line breaks for lambda function in main.py
+
+[33mcommit eaf08502ef03ea08c3571ea7492ecf3dc03fff7e[m
+Author: Felipe Toledo <lipelopes8@gmail.com>
+Date:   Fri Mar 6 09:14:29 2026 -0300
+
+    feat(ui): display numerical EAR values with visual indicators for eye state
+    
+    Improve eye status display by showing precise EAR values instead of binary open/closed state. Add visual indicators (asterisks and color coding) to show when eyes are below blink threshold. This provides better debugging and user feedback about the eye tracking system's current state.
+    
+    Also refactor blink detection to use smoothed EAR values and improve cooldown logic, and add comprehensive README documentation.
