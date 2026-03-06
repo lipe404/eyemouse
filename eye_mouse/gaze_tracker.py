@@ -66,3 +66,33 @@ class GazeTracker:
             return left_iris, right_iris, landmarks
 
         return None, None, None
+
+    def draw_debug(self, frame, landmarks):
+        """Desenha landmarks da íris e contornos dos olhos para debug visual."""
+        if not landmarks:
+            return
+
+        img_h, img_w = frame.shape[:2]
+
+        # Função auxiliar para converter coordenadas normalizadas -> pixels
+        def to_pixel(lm):
+            return int(lm.x * img_w), int(lm.y * img_h)
+
+        # Desenhar íris esquerda
+        for idx in self.LEFT_IRIS:
+            cv2.circle(frame, to_pixel(landmarks[idx]), 1, (0, 255, 0), -1)
+
+        # Desenhar íris direita
+        for idx in self.RIGHT_IRIS:
+            cv2.circle(frame, to_pixel(landmarks[idx]), 1, (0, 255, 0), -1)
+
+        # Desenhar contorno dos olhos (índices aproximados do MediaPipe)
+        # Olho esquerdo: 33, 133, 160, 159, 158, 144, 145, 153
+        left_eye_indices = [33, 133, 160, 159, 158, 144, 145, 153]
+        pts_left = np.array([to_pixel(landmarks[i]) for i in left_eye_indices], np.int32)
+        cv2.polylines(frame, [pts_left], True, (255, 255, 0), 1)
+
+        # Olho direito: 362, 263, 387, 386, 385, 373, 374, 380
+        right_eye_indices = [362, 263, 387, 386, 385, 373, 374, 380]
+        pts_right = np.array([to_pixel(landmarks[i]) for i in right_eye_indices], np.int32)
+        cv2.polylines(frame, [pts_right], True, (255, 255, 0), 1)

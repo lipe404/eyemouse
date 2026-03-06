@@ -36,6 +36,7 @@ class EyeMouseApp:
 
         # Estado compartilhado
         self.latest_gaze_raw = None  # (x, y) normalizado
+        self.latest_frame = None # Frame da câmera com anotações
         self.last_face_time = 0
         self.fps = 0
 
@@ -97,6 +98,7 @@ class EyeMouseApp:
             self.calibration_manager,
             self.get_latest_gaze_raw,
             self.on_calibration_complete,
+            lambda: self.latest_frame
         )
 
     def on_calibration_complete(self):
@@ -157,6 +159,11 @@ class EyeMouseApp:
 
             # Processamento
             left_iris, right_iris, landmarks = self.gaze_tracker.process_frame(frame)
+
+            if landmarks:
+                # Desenhar debug no frame para a UI
+                self.gaze_tracker.draw_debug(frame, landmarks)
+                self.latest_frame = frame.copy()
 
             if left_iris is not None and right_iris is not None:
                 self.last_face_time = current_time
