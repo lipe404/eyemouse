@@ -63,3 +63,16 @@ O arquivo `config.py` permite ajustar parâmetros avançados para adaptar o sist
 *   **CAMERA_INDEX**: Índice da webcam a ser utilizada.
 *   **EMA_ALPHA**: Fator de suavização do cursor (valores menores = mais suave, porém com maior latência).
 *   **BLINK_EAR_THRESHOLD**: Sensibilidade da detecção de piscada (ajuste se os cliques não estiverem sendo registrados ou ocorrendo involuntariamente).
+
+## Gerando Executável (.exe)
+
+Para criar um arquivo executável único para distribuir a amigos ou rodar sem Python instalado:
+
+1.  Certifique-se de ter instalado as dependências (`pip install -r eye_mouse/requirements.txt`).
+2.  Execute o script de build na raiz do projeto:
+    ```bash
+    python build_exe.py
+    ```
+3.  O arquivo `EyeMouse.exe` será gerado na pasta `dist/`.
+    *   Este arquivo contém tudo o que é necessário para rodar.
+    *   **Nota**: Na primeira execução, o Windows Defender pode exibir um aviso por ser um software não assinado. Clique em "Mais informações" > "Executar mesmo assim".

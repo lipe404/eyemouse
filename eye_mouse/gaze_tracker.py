@@ -4,29 +4,16 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import numpy as np
 import os
+from config import get_resource_path, MODEL_FILE
 
 
 class GazeTracker:
-    def __init__(self, model_filename="face_landmarker.task"):
-        # Localizar o arquivo .task
-        # Tenta no diretório atual ou no mesmo diretório do script
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(current_dir, model_filename)
-
+    def __init__(self, model_filename=MODEL_FILE):
+        # Localizar o arquivo .task usando helper que suporta PyInstaller
+        model_path = get_resource_path(model_filename)
+        
         if not os.path.exists(model_path):
-            # Tenta no diretório pai se não achar (caso rodando de fora)
-            parent_dir = os.path.dirname(current_dir)
-            possible_path = os.path.join(parent_dir, model_filename)
-            if os.path.exists(possible_path):
-                model_path = possible_path
-            else:
-                # Fallback para tentar achar em qualquer lugar ou usar o nome direto
-                if os.path.exists(model_filename):
-                    model_path = model_filename
-                else:
-                    raise FileNotFoundError(
-                        f"Modelo {model_filename} não encontrado em {current_dir}. Baixe-o do site do MediaPipe."
-                    )
+             raise FileNotFoundError(f"Modelo não encontrado em: {model_path}")
 
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(
