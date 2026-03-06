@@ -3,7 +3,15 @@ import sys
 
 
 def get_resource_path(relative_path):
-    """Retorna o caminho absoluto para recursos, funcionando para dev e PyInstaller."""
+    """
+    Retorna o caminho absoluto para recursos, funcionando para dev e PyInstaller.
+
+    Args:
+        relative_path (str): O caminho relativo do recurso.
+
+    Returns:
+        str: O caminho absoluto para o recurso.
+    """
     try:
         # PyInstaller cria um diretório temporário e armazena o caminho em _MEIPASS
         base_path = sys._MEIPASS
@@ -14,7 +22,14 @@ def get_resource_path(relative_path):
 
 
 def get_user_data_dir():
-    """Retorna o diretório para salvar dados do usuário (calibração, logs)."""
+    """
+    Retorna o diretório para salvar dados do usuário (calibração, logs).
+
+    Cria o diretório se ele não existir.
+
+    Returns:
+        str: O caminho absoluto para o diretório de dados do usuário.
+    """
     # Usa a pasta Documentos/EyeMouse
     docs_dir = os.path.join(os.path.expanduser("~"), "Documents", "EyeMouse")
     if not os.path.exists(docs_dir):

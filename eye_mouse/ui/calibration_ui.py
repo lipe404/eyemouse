@@ -7,6 +7,13 @@ from config import SCREEN_MARGIN, CALIBRATION_FRAMES_PER_POINT, CALIBRATION_POIN
 
 
 class CalibrationUI:
+    """
+    Interface de usuário para o processo de calibração.
+
+    Exibe pontos na tela para o usuário olhar, coleta dados do rastreador
+    e fornece feedback visual (animações, progresso).
+    """
+
     def __init__(
         self,
         root,
@@ -15,6 +22,16 @@ class CalibrationUI:
         on_complete,
         get_latest_frame_fn=None,
     ):
+        """
+        Inicializa a UI de calibração.
+
+        Args:
+            root (tk.Tk): Janela raiz do Tkinter.
+            calibration_manager (CalibrationManager): Gerenciador de calibração.
+            get_latest_gaze_fn (callable): Função para obter dados recentes do olhar.
+            on_complete (callable): Callback chamado ao finalizar a calibração.
+            get_latest_frame_fn (callable, optional): Função para obter o frame da câmera.
+        """
         self.root = root
         self.calib_manager = calibration_manager
         self.get_latest_gaze = get_latest_gaze_fn
@@ -92,6 +109,7 @@ class CalibrationUI:
         self.update_video_feed()
 
     def update_video_feed(self):
+        """Atualiza o feed de vídeo na tela de calibração."""
         if not self.window.winfo_exists():
             return
 
@@ -122,11 +140,13 @@ class CalibrationUI:
         self.window.after(33, self.update_video_feed)
 
     def start_sequence(self):
+        """Inicia a sequência de calibração."""
         # Limpar pontos anteriores do manager
         self.calib_manager.clear_points()
         self.show_point()
 
     def show_point(self):
+        """Exibe o próximo ponto de calibração ou finaliza se acabou."""
         if self.current_point_idx >= len(self.points):
             self.finish_calibration()
             return
@@ -142,6 +162,13 @@ class CalibrationUI:
         self.animate_point(x, y)
 
     def animate_point(self, x, y):
+        """
+        Anima o ponto de calibração (pulsante e countdown).
+
+        Args:
+            x (int): Coordenada X do ponto.
+            y (int): Coordenada Y do ponto.
+        """
         # Duração da animação/countdown antes de coletar
         ANIMATION_DURATION = 1.5 
         
@@ -187,12 +214,19 @@ class CalibrationUI:
         self.window.after(33, lambda: self.animate_point(x, y))
 
     def start_collection(self):
+        """Inicia a coleta de dados para o ponto atual."""
         self.is_collecting = True
         # Capturar índice atual para evitar race conditions (Melhoria 23)
         current_idx = self.current_point_idx
         self.collect_loop(current_idx)
 
     def collect_loop(self, point_idx):
+        """
+        Loop de coleta de dados de calibração.
+
+        Args:
+            point_idx (int): Índice do ponto sendo coletado.
+        """
         if not self.is_collecting:
             return
         
@@ -222,6 +256,7 @@ class CalibrationUI:
         self.window.after(33, lambda: self.collect_loop(point_idx))
 
     def update_progress(self, percent):
+        """Atualiza a barra de progresso visual."""
         cx = self.width // 2
         cy = self.height // 2
         bar_width = 200
@@ -235,6 +270,7 @@ class CalibrationUI:
         )
 
     def finish_calibration(self):
+        """Finaliza o processo de calibração e fecha a janela."""
         self.canvas.delete("all")
         self.canvas.create_text(
             self.width // 2,
@@ -249,9 +285,11 @@ class CalibrationUI:
         self.window.after(100, self.close)
 
     def close(self):
+        """Fecha a janela e chama callback de sucesso."""
         self.window.destroy()
         self.on_complete(cancelled=False)
 
     def on_user_close(self):
+        """Lida com o fechamento manual da janela pelo usuário."""
         self.window.destroy()
         self.on_complete(cancelled=True)

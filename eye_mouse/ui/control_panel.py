@@ -4,9 +4,27 @@ from config import EMA_ALPHA
 
 
 class ControlPanel:
+    """
+    Painel de controle flutuante do aplicativo.
+
+    Permite ajustar parâmetros em tempo real, pausar/retomar, recalibrar
+    e visualizar status (FPS, estado dos olhos).
+    """
+
     def __init__(
         self, root, on_pause_toggle, on_recalibrate, on_quit, update_smoothing_cb, on_blink_calibrate
     ):
+        """
+        Inicializa o painel de controle.
+
+        Args:
+            root (tk.Tk): Janela raiz.
+            on_pause_toggle (callable): Callback para pausar/retomar.
+            on_recalibrate (callable): Callback para recalibrar tela.
+            on_quit (callable): Callback para sair do app.
+            update_smoothing_cb (callable): Callback para ajustar suavização.
+            on_blink_calibrate (callable): Callback para calibrar piscada.
+        """
         self.root = root
         self.on_pause_toggle = on_pause_toggle
         self.on_recalibrate = on_recalibrate
@@ -66,7 +84,7 @@ class ControlPanel:
         row1.pack(fill="x", pady=2)
 
         self.pause_btn = ttk.Button(
-            row1, text="Pausar", command=self._toggle_pause
+            row1, text="Pausar (Ctrl+Shift+P)", command=self._toggle_pause
         )
         self.pause_btn.pack(side="left", expand=True, fill="x", padx=2)
 
@@ -91,6 +109,12 @@ class ControlPanel:
         # Intercept close event
         self.window.protocol("WM_DELETE_WINDOW", self.on_quit)
 
+    def update_pause_text(self, is_paused):
+        if is_paused:
+            self.pause_btn.config(text="Retomar (Ctrl+Shift+P)")
+        else:
+            self.pause_btn.config(text="Pausar (Ctrl+Shift+P)")
+
     def _toggle_pause(self):
         self.is_paused = not self.is_paused
         if self.on_pause_toggle:
@@ -102,6 +126,15 @@ class ControlPanel:
             self.update_smoothing_cb(float(value))
 
     def update_status(self, fps, left_ear, right_ear, current_threshold=0.20):
+        """
+        Atualiza os indicadores de status na UI.
+
+        Args:
+            fps (float): Frames por segundo atuais.
+            left_ear (float): EAR do olho esquerdo.
+            right_ear (float): EAR do olho direito.
+            current_threshold (float): Threshold atual de piscada.
+        """
         self.fps_label.config(text=f"FPS: {int(fps)}")
 
         # Hack simples: adicionar asterisco se fechado (usando threshold atual)

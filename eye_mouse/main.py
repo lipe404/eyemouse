@@ -26,7 +26,15 @@ logging.basicConfig(
 
 
 class EyeMouseApp:
+    """
+    Classe principal da aplicação EyeMouse.
+
+    Gerencia o ciclo de vida da aplicação, threads de câmera e processamento,
+    interface de usuário e coordenação entre os módulos.
+    """
+
     def __init__(self):
+        """Inicializa a aplicação, carregando configurações e módulos."""
         self.root = tk.Tk()
         self.root.withdraw()  # Esconder janela principal raiz
 
@@ -116,6 +124,7 @@ class EyeMouseApp:
         self.root.after(500, self.update_ui_loop)
 
     def start_calibration(self):
+        """Inicia o processo de calibração de tela."""
         self.is_calibrating = True
         self.is_paused = True  # Pausa controle do mouse
         logging.info("Iniciando calibração...")
@@ -141,6 +150,12 @@ class EyeMouseApp:
         )
 
     def on_calibration_complete(self, cancelled=False):
+        """
+        Callback chamado ao finalizar a calibração.
+
+        Args:
+            cancelled (bool): Se o usuário cancelou a calibração.
+        """
         if cancelled:
             self.is_calibrating = False
             self.is_paused = False
@@ -186,6 +201,7 @@ class EyeMouseApp:
             self.show_control_panel()
 
     def show_control_panel(self):
+        """Exibe o painel de controle."""
         if not self.control_panel:
             self.control_panel = ControlPanel(
                 self.root,
@@ -209,30 +225,45 @@ class EyeMouseApp:
             self.root.after(0, lambda: self.control_panel.update_pause_text(new_state))
 
     def get_latest_gaze_raw(self):
+        """Retorna a posição do olhar mais recente (thread-safe)."""
         with self.data_lock:
             return self.latest_gaze_raw
 
     def get_latest_frame(self):
+        """Retorna o frame de vídeo mais recente (thread-safe)."""
         with self.data_lock:
             if self.latest_frame is not None:
                 return self.latest_frame.copy()
             return None
 
     def toggle_pause(self, paused):
+        """
+        Alterna o estado de pausa.
+
+        Args:
+            paused (bool): Novo estado de pausa.
+        """
         self.is_paused = paused
         logging.info(f"Pausado: {paused}")
 
     def update_smoothing(self, value):
+        """Atualiza o fator de suavização do mouse."""
         self.mouse_controller.set_smoothing_alpha(value)
 
     def quit_app(self):
+        """Encerra a aplicação e libera recursos."""
         self.running = False
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
         if self.cap.isOpened():
             self.cap.release()
         self.root.quit()
         sys.exit(0)
 
     def update_ui_loop(self):
+        """Loop periódico para atualizar a UI (status, etc)."""
         if self.control_panel:
             # Obter estado atual dos olhos (simplificado aqui, ideal seria thread-safe)
             # Como é UI, não precisa ser perfeito em tempo real

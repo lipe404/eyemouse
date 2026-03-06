@@ -35,6 +35,7 @@ def build():
         f"--add-data={model_file};.",
         # Coletar tudo do mediapipe para evitar erros de importação dinâmica
         "--collect-all=mediapipe",
+        "--hidden-import=keyboard",
         # Opcional: Adicionar ícone se tiver (ex: --icon=icon.ico)
     ]
 

@@ -13,7 +13,16 @@ from config import (
 
 
 class BlinkDetector:
+    """
+    Detecta piscadas e gestos oculares para controle do mouse.
+
+    Utiliza o Eye Aspect Ratio (EAR) para determinar se os olhos estão abertos
+    ou fechados. Implementa lógica para diferenciar piscadas voluntárias (cliques)
+    de reflexos involuntários, além de permitir calibração dinâmica do threshold.
+    """
+
     def __init__(self):
+        """Inicializa o detector de piscadas com parâmetros padrão."""
         # Indices dos landmarks para cálculo do EAR (MediaPipe Face Mesh)
         self.LEFT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
         self.RIGHT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
@@ -53,7 +62,21 @@ class BlinkDetector:
         self.last_process_time = 0
 
     def calculate_ear(self, landmarks, indices, img_w, img_h):
-        """Calcula o Eye Aspect Ratio (EAR) para um olho."""
+        """
+        Calcula o Eye Aspect Ratio (EAR) para um olho.
+
+        O EAR é uma medida da abertura do olho, baseada na relação entre
+        a altura e a largura do olho nos landmarks.
+
+        Args:
+            landmarks: Lista de landmarks faciais do MediaPipe.
+            indices (list): Índices dos landmarks correspondentes ao olho.
+            img_w (int): Largura da imagem em pixels.
+            img_h (int): Altura da imagem em pixels.
+
+        Returns:
+            float: O valor do EAR calculado. Retorna 0.0 se a largura for 0.
+        """
         # Extrair coordenadas dos pontos
         coords = []
         for idx in indices:
@@ -77,7 +100,15 @@ class BlinkDetector:
         return ear
 
     def start_calibration(self, duration=10.0):
-        """Inicia a calibração do threshold de piscada."""
+        """
+        Inicia a calibração do threshold de piscada.
+
+        Durante a calibração, o sistema coleta amostras de EAR para definir
+        um threshold personalizado baseado na fisionomia do usuário.
+
+        Args:
+            duration (float): Duração da calibração em segundos.
+        """
         self.is_calibrating = True
         self.calibration_start_time = time.time()
         self.calibration_duration = duration
@@ -87,7 +118,23 @@ class BlinkDetector:
     def process(self, landmarks, img_w, img_h):
         """
         Processa os landmarks e retorna eventos de piscada.
-        Retorna: (left_blink, right_blink, double_blink, hold_start, hold_end, ears)
+
+        Analisa o estado dos olhos (aberto/fechado), detecta gestos (piscada,
+        piscada longa para arrastar) e filtra reflexos involuntários.
+
+        Args:
+            landmarks: Lista de landmarks faciais do MediaPipe.
+            img_w (int): Largura da imagem.
+            img_h (int): Altura da imagem.
+
+        Returns:
+            tuple: (left_blink, right_blink, double_blink, hold_start, hold_end, ears)
+                - left_blink (bool): True se houve clique esquerdo.
+                - right_blink (bool): True se houve clique direito.
+                - double_blink (bool): True se houve clique duplo (não implementado ainda).
+                - hold_start (bool): True se iniciou modo arrastar.
+                - hold_end (bool): True se finalizou modo arrastar.
+                - ears (tuple): (left_ear, right_ear) atuais.
         """
         current_time = time.time()
         

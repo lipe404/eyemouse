@@ -8,7 +8,23 @@ from config import get_resource_path, MODEL_FILE
 
 
 class GazeTracker:
+    """
+    Rastreia a posição do olhar (íris) usando MediaPipe Face Landmarker.
+
+    Processa frames de vídeo para detectar landmarks faciais e extrair
+    a posição das íris.
+    """
+
     def __init__(self, model_filename=MODEL_FILE):
+        """
+        Inicializa o rastreador de olhar.
+
+        Args:
+            model_filename (str): Nome do arquivo de modelo do MediaPipe.
+
+        Raises:
+            FileNotFoundError: Se o arquivo de modelo não for encontrado.
+        """
         # Localizar o arquivo .task usando helper que suporta PyInstaller
         model_path = get_resource_path(model_filename)
 
@@ -29,7 +45,18 @@ class GazeTracker:
         self.RIGHT_IRIS = [473, 474, 475, 476, 477]
 
     def get_iris_position(self, landmarks, iris_indices, img_w, img_h):
-        """Calcula o centro da íris em coordenadas normalizadas (0.0-1.0) relativas à imagem ou absolutas."""
+        """
+        Calcula o centro da íris em coordenadas normalizadas (0.0-1.0) relativas à imagem ou absolutas.
+
+        Args:
+            landmarks: Lista de landmarks faciais.
+            iris_indices (list): Índices dos landmarks da íris.
+            img_w (int): Largura da imagem.
+            img_h (int): Altura da imagem.
+
+        Returns:
+            numpy.ndarray: Coordenadas (x, y) do centro da íris.
+        """
 
         # Coletar pontos da íris
         iris_points = np.array(
@@ -43,7 +70,15 @@ class GazeTracker:
     def process_frame(self, frame):
         """
         Processa um frame e retorna as posições das íris.
-        Retorna: (left_iris_center, right_iris_center, landmarks) ou (None, None, None)
+
+        Args:
+            frame (numpy.ndarray): Frame de vídeo (BGR).
+
+        Returns:
+            tuple: (left_iris_center, right_iris_center, landmarks)
+                - left_iris_center: Coordenadas da íris esquerda.
+                - right_iris_center: Coordenadas da íris direita.
+                - landmarks: Objeto com landmarks faciais completos ou None.
         """
         img_h, img_w = frame.shape[:2]
 
@@ -68,7 +103,13 @@ class GazeTracker:
         return None, None, None
 
     def draw_debug(self, frame, landmarks):
-        """Desenha landmarks da íris e contornos dos olhos para debug visual."""
+        """
+        Desenha landmarks da íris e contornos dos olhos para debug visual.
+
+        Args:
+            frame (numpy.ndarray): Frame onde desenhar.
+            landmarks: Landmarks faciais detectados.
+        """
         if not landmarks:
             return
 
