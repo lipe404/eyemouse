@@ -209,14 +209,16 @@ class EyeMouseApp:
                             fps = 0
                             if dt > 0:
                                 fps = 1.0 / dt
-                            
+
                             l_ear, r_ear = ears
 
                             # Executar atualização na thread principal
                             # Usamos lambda com argumentos default para capturar valores
                             self.root.after(
                                 0,
-                                lambda f=fps, l=l_ear, r=r_ear: self.control_panel.update_status(f, l, r)
+                                lambda f=fps, l=l_ear, r=r_ear: self.control_panel.update_status(
+                                    f, l, r
+                                ),
                             )
 
             else:

@@ -24,7 +24,7 @@ class SmoothingFilter:
         if dist < self.dead_zone:
             return self.prev_x, self.prev_y
 
-        # Aceleração adaptativa (opcional, mas recomendada)
+        # Aceleração adaptativa
         # Se o movimento for muito grande, aumenta o alpha para responder mais rápido
         current_alpha = self.alpha
         if dist > 100:
