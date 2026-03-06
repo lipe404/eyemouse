@@ -1,1 +1,13 @@
 2026-03-06 08:54:29,649 - ERROR - Erro ao inicializar módulos: module 'mediapipe' has no attribute 'solutions'
+2026-03-06 09:00:48,464 - INFO - Módulos inicializados com sucesso.
+2026-03-06 09:00:52,542 - INFO - Iniciando calibração...
+2026-03-06 09:02:14,384 - INFO - Módulos inicializados com sucesso.
+2026-03-06 09:02:16,295 - INFO - Iniciando calibração...
+2026-03-06 09:02:34,345 - INFO - Calibração concluída.
+2026-03-06 09:02:39,813 - INFO - Clique Direito
+2026-03-06 09:02:55,149 - INFO - Módulos inicializados com sucesso.
+2026-03-06 09:03:15,671 - INFO - Clique Esquerdo
+2026-03-06 09:03:37,718 - INFO - Módulos inicializados com sucesso.
+2026-03-06 09:03:41,448 - INFO - Iniciando calibração...
+2026-03-06 09:03:59,275 - INFO - Calibração concluída.
+2026-03-06 09:04:05,713 - INFO - Clique Direito

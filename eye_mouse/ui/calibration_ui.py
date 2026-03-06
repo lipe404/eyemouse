@@ -91,7 +91,7 @@ class CalibrationUI:
         # Obter dados do gaze (média dos dois olhos se possível)
         gaze_data = self.get_latest_gaze()
         
-        if gaze_data:
+        if gaze_data is not None:
             # gaze_data deve ser (left_iris, right_iris) ou similar
             # Vamos assumir que get_latest_gaze retorna um array numpy ou tupla (x, y) combinado
             # Se retornar None, ignoramos este frame
