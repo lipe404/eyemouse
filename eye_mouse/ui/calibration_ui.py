@@ -188,10 +188,16 @@ class CalibrationUI:
 
     def start_collection(self):
         self.is_collecting = True
-        self.collect_loop()
+        # Capturar índice atual para evitar race conditions (Melhoria 23)
+        current_idx = self.current_point_idx
+        self.collect_loop(current_idx)
 
-    def collect_loop(self):
+    def collect_loop(self, point_idx):
         if not self.is_collecting:
+            return
+        
+        # Verificar se o índice ainda é válido (segurança)
+        if point_idx >= len(self.points):
             return
 
         if self.frames_collected >= self.max_frames:
@@ -204,8 +210,8 @@ class CalibrationUI:
         gaze_data = self.get_latest_gaze()
 
         if gaze_data is not None:
-            # Recuperar coordenadas da tela do ponto atual
-            screen_x, screen_y = self.points[self.current_point_idx]
+            # Recuperar coordenadas da tela do ponto atual usando o índice capturado
+            screen_x, screen_y = self.points[point_idx]
 
             self.calib_manager.add_point(gaze_data, (screen_x, screen_y))
 
@@ -213,7 +219,7 @@ class CalibrationUI:
             self.update_progress(self.frames_collected / self.max_frames)
 
         # Tentar novamente em breve (aprox 30 FPS = 33ms)
-        self.window.after(33, self.collect_loop)
+        self.window.after(33, lambda: self.collect_loop(point_idx))
 
     def update_progress(self, percent):
         cx = self.width // 2

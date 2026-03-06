@@ -7,6 +7,7 @@ import numpy as np
 import logging
 import sys
 import queue
+import keyboard
 
 from gaze_tracker import GazeTracker
 from blink_detector import BlinkDetector
@@ -54,6 +55,12 @@ class EyeMouseApp:
         # Fila de frames (Câmera -> Processamento - Melhoria 17)
         # Maxsize pequeno para garantir baixa latência (drop frame se processamento lento)
         self.frame_queue = queue.Queue(maxsize=1)
+
+        # Atalho Global (Melhoria 21)
+        try:
+            keyboard.add_hotkey("ctrl+shift+p", self.toggle_pause_hotkey)
+        except Exception as e:
+            logging.error(f"Erro ao registrar hotkey: {e}")
 
         # Inicializar módulos
         try:
@@ -189,6 +196,18 @@ class EyeMouseApp:
                 self.start_blink_calibration # Novo callback
             )
 
+    def toggle_pause_hotkey(self):
+        """Callback para o atalho de teclado."""
+        # Inverte o estado de pausa
+        new_state = not self.is_paused
+        self.toggle_pause(new_state)
+        # Tentar atualizar UI se possível
+        if self.control_panel:
+            # ControlPanel deve ter um método para atualizar o botão, mas toggle_pause já é passado como callback.
+            # No entanto, o botão PauseButton precisa mudar o texto.
+            # Como estamos em thread separada (keyboard), usar after para thread-safety
+            self.root.after(0, lambda: self.control_panel.update_pause_text(new_state))
+
     def get_latest_gaze_raw(self):
         with self.data_lock:
             return self.latest_gaze_raw
@@ -223,12 +242,28 @@ class EyeMouseApp:
 
     def camera_loop(self):
         """Thread produtora: Captura frames da câmera."""
+        consecutive_failures = 0
+        MAX_FAILURES = 30 # Aprox 1 segundo
+
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_FAILURES:
+                     logging.error("Falha na câmera: desconectada ou erro de leitura.")
+                     # Pausar e avisar usuário (via UI thread)
+                     self.root.after(0, lambda: messagebox.showerror(
+                         "Erro de Câmera", 
+                         "A câmera parece ter sido desconectada.\nVerifique a conexão e reinicie o aplicativo."
+                     ))
+                     self.running = False # Parar loops
+                     break
+                
                 time.sleep(0.1)
                 continue
             
+            consecutive_failures = 0 # Resetar contador se sucesso
+
             # Melhoria 16: Fila thread-safe com drop de frames antigos
             if self.frame_queue.full():
                 try:

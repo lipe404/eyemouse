@@ -93,13 +93,9 @@ class ControlPanel:
 
     def _toggle_pause(self):
         self.is_paused = not self.is_paused
-        self.pause_btn.config(text="Retomar" if self.is_paused else "Pausar")
-        self.mode_label.config(
-            text="Modo: Pausado" if self.is_paused else "Modo: Ativo",
-            foreground="red" if self.is_paused else "green",
-        )
         if self.on_pause_toggle:
             self.on_pause_toggle(self.is_paused)
+        self.update_pause_text(self.is_paused)
 
     def _on_scale_change(self, value):
         if self.update_smoothing_cb:
