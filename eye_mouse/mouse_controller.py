@@ -1,4 +1,10 @@
 import pyautogui
+import threading
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
 from utils.smoothing import SmoothingFilter
 from config import SCREEN_MARGIN, EMA_ALPHA
 
@@ -10,6 +16,16 @@ class MouseController:
         self.smoothing = SmoothingFilter()
         self.smoothing.set_alpha(EMA_ALPHA)
         self.is_dragging = False
+
+    def _play_sound(self, frequency=1000, duration=100):
+        """Toca um beep em uma thread separada para não bloquear o mouse."""
+        if winsound:
+            def run():
+                try:
+                    winsound.Beep(frequency, duration)
+                except Exception:
+                    pass
+            threading.Thread(target=run, daemon=True).start()
 
     def move(self, x, y):
         """Move o mouse para as coordenadas (x, y) com suavização."""
@@ -24,19 +40,27 @@ class MouseController:
 
     def click(self, button="left"):
         pyautogui.click(button=button)
+        # Feedback sonoro (Melhoria 10)
+        if button == "left":
+            self._play_sound(1000, 50)
+        else:
+            self._play_sound(500, 50) # Som mais grave para direito
 
     def double_click(self):
         pyautogui.doubleClick()
+        self._play_sound(1500, 50) # Som mais agudo
 
     def start_drag(self):
         if not self.is_dragging:
             pyautogui.mouseDown()
             self.is_dragging = True
+            self._play_sound(800, 200) # Som longo para indicar 'segurando'
 
     def stop_drag(self):
         if self.is_dragging:
             pyautogui.mouseUp()
             self.is_dragging = False
+            self._play_sound(600, 100) # Som de soltar
 
     def set_smoothing_alpha(self, alpha):
         self.smoothing.set_alpha(alpha)

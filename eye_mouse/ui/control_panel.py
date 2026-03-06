@@ -5,17 +5,18 @@ from config import EMA_ALPHA
 
 class ControlPanel:
     def __init__(
-        self, root, on_pause_toggle, on_recalibrate, on_quit, update_smoothing_cb
+        self, root, on_pause_toggle, on_recalibrate, on_quit, update_smoothing_cb, on_blink_calibrate
     ):
         self.root = root
         self.on_pause_toggle = on_pause_toggle
         self.on_recalibrate = on_recalibrate
         self.on_quit = on_quit
         self.update_smoothing_cb = update_smoothing_cb
+        self.on_blink_calibrate = on_blink_calibrate
 
         self.window = tk.Toplevel(root)
         self.window.title("EyeMouse Control")
-        self.window.geometry("300x250")
+        self.window.geometry("300x320") # Aumentado altura para botão extra
         self.window.attributes("-topmost", True)
         self.window.resizable(False, False)
 
@@ -36,6 +37,9 @@ class ControlPanel:
 
         self.eye_status_label = ttk.Label(status_frame, text="Olhos: Detectando...")
         self.eye_status_label.pack(anchor="w")
+        
+        self.threshold_label = ttk.Label(status_frame, text="Thresh: 0.20")
+        self.threshold_label.pack(anchor="w")
 
         self.mode_label = ttk.Label(
             status_frame, text="Modo: Ativo", foreground="green"
@@ -56,16 +60,29 @@ class ControlPanel:
         # Botões
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill="x", pady=10)
+        
+        # Linha 1 de botões
+        row1 = ttk.Frame(btn_frame)
+        row1.pack(fill="x", pady=2)
 
         self.pause_btn = ttk.Button(
-            btn_frame, text="Pausar", command=self._toggle_pause
+            row1, text="Pausar", command=self._toggle_pause
         )
         self.pause_btn.pack(side="left", expand=True, fill="x", padx=2)
 
-        ttk.Button(btn_frame, text="Recalibrar", command=self.on_recalibrate).pack(
+        ttk.Button(row1, text="Sair", command=self.on_quit).pack(
             side="left", expand=True, fill="x", padx=2
         )
-        ttk.Button(btn_frame, text="Sair", command=self.on_quit).pack(
+        
+        # Linha 2 de botões (Calibração)
+        row2 = ttk.Frame(btn_frame)
+        row2.pack(fill="x", pady=2)
+        
+        ttk.Button(row2, text="Calibrar Tela", command=self.on_recalibrate).pack(
+            side="left", expand=True, fill="x", padx=2
+        )
+        
+        ttk.Button(row2, text="Calibrar Piscada", command=self.on_blink_calibrate).pack(
             side="left", expand=True, fill="x", padx=2
         )
 
@@ -88,25 +105,15 @@ class ControlPanel:
         if self.update_smoothing_cb:
             self.update_smoothing_cb(float(value))
 
-    def update_status(self, fps, left_ear, right_ear):
+    def update_status(self, fps, left_ear, right_ear, current_threshold=0.20):
         self.fps_label.config(text=f"FPS: {int(fps)}")
 
-        # Mostrar EAR numérico para debug
-        # L = Esquerdo, R = Direito
-        # Cor vermelha se estiver abaixo do threshold (fechado)
-        from config import BLINK_EAR_THRESHOLD
-
-        l_color = "red" if left_ear < BLINK_EAR_THRESHOLD else "black"
-        r_color = "red" if right_ear < BLINK_EAR_THRESHOLD else "black"
-
-        self.eye_status_label.config(
-            text=f"EAR E: {left_ear:.3f} | D: {right_ear:.3f}",
-            foreground="black",  # Reset default, maybe use distinct labels for colors later
-        )
-        # Hack simples: adicionar asterisco se fechado
-        l_status = "*" if left_ear < BLINK_EAR_THRESHOLD else " "
-        r_status = "*" if right_ear < BLINK_EAR_THRESHOLD else " "
+        # Hack simples: adicionar asterisco se fechado (usando threshold atual)
+        l_status = "*" if left_ear < current_threshold else " "
+        r_status = "*" if right_ear < current_threshold else " "
 
         self.eye_status_label.config(
             text=f"EAR E: {left_ear:.2f}{l_status} | D: {right_ear:.2f}{r_status}"
         )
+        
+        self.threshold_label.config(text=f"Thresh: {current_threshold:.3f}")

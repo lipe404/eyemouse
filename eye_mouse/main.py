@@ -101,6 +101,15 @@ class EyeMouseApp:
             lambda: self.latest_frame,
         )
 
+    def start_blink_calibration(self):
+        """Inicia a calibração de piscada (Melhoria 6)."""
+        self.blink_detector.start_calibration(duration=10.0)
+        messagebox.showinfo(
+            "Calibração de Piscada", 
+            "Olhe para a tela e pisque normalmente por 10 segundos.\n"
+            "O sistema ajustará a sensibilidade automaticamente."
+        )
+
     def on_calibration_complete(self):
         self.is_calibrating = False
         self.is_paused = False
@@ -119,6 +128,7 @@ class EyeMouseApp:
                 self.start_calibration,
                 self.quit_app,
                 self.update_smoothing,
+                self.start_blink_calibration # Novo callback
             )
 
     def get_latest_gaze_raw(self):
@@ -179,7 +189,8 @@ class EyeMouseApp:
                     # 1. Mapear para tela
                     screen_pos = self.calibration_manager.map_to_screen(avg_iris)
 
-                    if screen_pos:
+                    # Mover apenas se não estiver calibrando piscada (para evitar distração)
+                    if screen_pos and not self.blink_detector.is_calibrating:
                         sx, sy = screen_pos
                         self.mouse_controller.move(sx, sy)
 
@@ -218,13 +229,16 @@ class EyeMouseApp:
                                 fps = 1.0 / dt
 
                             l_ear, r_ear = ears
+                            
+                            # Obter threshold atual para UI
+                            current_thresh = self.blink_detector.ear_threshold
 
                             # Executar atualização na thread principal
                             # Usamos lambda com argumentos default para capturar valores
                             self.root.after(
                                 0,
-                                lambda f=fps, l=l_ear, r=r_ear: self.control_panel.update_status(
-                                    f, l, r
+                                lambda f=fps, l=l_ear, r=r_ear, t=current_thresh: self.control_panel.update_status(
+                                    f, l, r, t
                                 ),
                             )
 
@@ -233,8 +247,6 @@ class EyeMouseApp:
                 if current_time - self.last_face_time > 2.0:
                     if not self.is_paused and not self.is_calibrating:
                         # Auto-pause por segurança
-                        # Mas cuidado para não conflitar com UI thread
-                        # Apenas logar por enquanto ou mostrar aviso
                         pass
 
             last_time = current_time

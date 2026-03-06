@@ -36,11 +36,15 @@ EMA_ALPHA = 0.10  # Fator suavização (0.0 = max suave, 1.0 = sem suavização)
 DEAD_ZONE_PIXELS = 5  # Movimento mínimo do olho para mover cursor
 
 # Piscada
-BLINK_EAR_THRESHOLD = 0.20
+BLINK_EAR_THRESHOLD = 0.20 # Valor padrão (será ajustado dinamicamente)
 BLINK_MIN_FRAMES = 2
 BLINK_MAX_FRAMES = 15
 BLINK_COOLDOWN_SEC = 0.5
 HOLD_DURATION_SEC = 1.5  # Tempo para ativar modo arrastar
+
+# Diferenciação de Piscada (Novos parâmetros)
+BLINK_REFLEX_OPEN_SPEED = 0.08 # Velocidade de abertura (EAR/frame) acima disso é reflexo
+BLINK_INTENTIONAL_OPEN_SPEED = 0.05 # Abaixo disso é intencional
 
 # Calibração
 CALIBRATION_POINTS = 9
