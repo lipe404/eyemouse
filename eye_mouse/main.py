@@ -201,23 +201,22 @@ class EyeMouseApp:
                         self.mouse_controller.stop_drag()
 
                     # Atualizar UI status (FPS e Olhos)
-                    if (
-                        self.control_panel and frame_count % 5 == 0
-                    ):  # Atualizar a cada 5 frames para não travar
-                        # Calcular FPS
-                        dt = current_time - last_time
-                        if dt > 0:
-                            fps = 1.0 / dt
-                            # Ears
-                            l_open = ears[0] > BLINK_EAR_THRESHOLD
-                            r_open = ears[1] > BLINK_EAR_THRESHOLD
+                    if self.control_panel:
+                        # Atualizar a cada X frames para não travar a UI thread
+                        if frame_count % 5 == 0:
+                            # Calcular FPS
+                            dt = current_time - last_time
+                            fps = 0
+                            if dt > 0:
+                                fps = 1.0 / dt
+                            
+                            l_ear, r_ear = ears
 
-                            # Executar na thread principal
+                            # Executar atualização na thread principal
+                            # Usamos lambda com argumentos default para capturar valores
                             self.root.after(
                                 0,
-                                lambda f=fps, l=l_open, r=r_open: self.control_panel.update_status(
-                                    f, l, r
-                                ),
+                                lambda f=fps, l=l_ear, r=r_ear: self.control_panel.update_status(f, l, r)
                             )
 
             else:

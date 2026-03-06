@@ -1,6 +1,7 @@
 import time
 import math
 import numpy as np
+from collections import deque
 from config import (
     BLINK_EAR_THRESHOLD,
     BLINK_MIN_FRAMES,
@@ -13,18 +14,18 @@ from config import (
 class BlinkDetector:
     def __init__(self):
         # Indices dos landmarks para cálculo do EAR (MediaPipe Face Mesh)
-        # P1, P2, P3, P4, P5, P6
-        self.LEFT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
-        self.RIGHT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
+        self.LEFT_EYE_IDXS = [362, 385, 387, 263, 373, 380]
+        self.RIGHT_EYE_IDXS = [33, 160, 158, 133, 153, 144]
 
         # Estado atual
         self.left_closed_frames = 0
         self.right_closed_frames = 0
-        self.left_blink_detected = False
-        self.right_blink_detected = False
         self.last_blink_time = 0
-        self.hold_start_time = 0
         self.is_holding = False
+        
+        # Histórico para suavização do EAR
+        self.left_ear_history = deque(maxlen=3)
+        self.right_ear_history = deque(maxlen=3)
 
     def calculate_ear(self, landmarks, indices, img_w, img_h):
         """Calcula o Eye Aspect Ratio (EAR) para um olho."""
@@ -53,64 +54,67 @@ class BlinkDetector:
     def process(self, landmarks, img_w, img_h):
         """
         Processa os landmarks e retorna eventos de piscada.
-        Retorna: (left_blink, right_blink, double_blink, hold_start, hold_end)
+        Retorna: (left_blink, right_blink, double_blink, hold_start, hold_end, ears)
         """
         current_time = time.time()
+        
+        # Calcular EAR bruto
+        raw_left_ear = self.calculate_ear(landmarks, self.LEFT_EYE_IDXS, img_w, img_h)
+        raw_right_ear = self.calculate_ear(landmarks, self.RIGHT_EYE_IDXS, img_w, img_h)
+        
+        # Suavização (Média Móvel)
+        self.left_ear_history.append(raw_left_ear)
+        self.right_ear_history.append(raw_right_ear)
+        
+        left_ear = np.mean(self.left_ear_history)
+        right_ear = np.mean(self.right_ear_history)
 
-        # Se estiver em cooldown, ignora (exceto para soltar o hold)
-        if (
-            current_time - self.last_blink_time < BLINK_COOLDOWN_SEC
-            and not self.is_holding
-        ):
-            return False, False, False, False, False
-
-        left_ear = self.calculate_ear(landmarks, self.LEFT_EYE_IDXS, img_w, img_h)
-        right_ear = self.calculate_ear(landmarks, self.RIGHT_EYE_IDXS, img_w, img_h)
-
+        # Detectar estado fechado
         left_closed = left_ear < BLINK_EAR_THRESHOLD
         right_closed = right_ear < BLINK_EAR_THRESHOLD
 
-        # --- Lógica Olho Esquerdo ---
+        # --- Lógica Olho Esquerdo (Clique Esquerdo / Arrastar) ---
         left_action = False
         hold_start = False
         hold_end = False
 
         if left_closed:
             self.left_closed_frames += 1
-
+            
             # Verificar início de hold (arrastar)
-            if self.left_closed_frames > (30 * HOLD_DURATION_SEC):  # Aprox 30 FPS
+            # 30 FPS * HOLD_DURATION_SEC
+            if self.left_closed_frames > (30 * HOLD_DURATION_SEC):
                 if not self.is_holding:
                     self.is_holding = True
                     hold_start = True
-                    # print("HOLD START")
         else:
             # O olho abriu
             if self.left_closed_frames > 0:
+                # Se estava segurando, solta
                 if self.is_holding:
                     self.is_holding = False
                     hold_end = True
-                    # print("HOLD END")
+                # Se foi rápido, é clique
                 elif BLINK_MIN_FRAMES <= self.left_closed_frames <= BLINK_MAX_FRAMES:
-                    left_action = True
-
+                    # Verifica cooldown apenas para cliques
+                    if current_time - self.last_blink_time > BLINK_COOLDOWN_SEC:
+                        left_action = True
+            
             self.left_closed_frames = 0
 
-        # --- Lógica Olho Direito ---
+        # --- Lógica Olho Direito (Clique Direito) ---
         right_action = False
+        
         if right_closed:
             self.right_closed_frames += 1
         else:
             if self.right_closed_frames > 0:
                 if BLINK_MIN_FRAMES <= self.right_closed_frames <= BLINK_MAX_FRAMES:
-                    right_action = True
+                    if current_time - self.last_blink_time > BLINK_COOLDOWN_SEC:
+                        right_action = True
             self.right_closed_frames = 0
 
         # Detectar piscada simultânea (duplo clique)
-        # Simplificação: se ambos detectaram ação no mesmo frame ou muito próximos
-        # Na prática, como processamos frame a frame, se ambos fecharam e abriram juntos
-        # vamos considerar duplo clique se ambos dispararem 'action' neste frame
-
         double_blink = False
         if left_action and right_action:
             double_blink = True
