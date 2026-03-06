@@ -7,7 +7,14 @@ from config import SCREEN_MARGIN, CALIBRATION_FRAMES_PER_POINT
 
 
 class CalibrationUI:
-    def __init__(self, root, calibration_manager, get_latest_gaze_fn, on_complete, get_latest_frame_fn=None):
+    def __init__(
+        self,
+        root,
+        calibration_manager,
+        get_latest_gaze_fn,
+        on_complete,
+        get_latest_frame_fn=None,
+    ):
         self.root = root
         self.calib_manager = calibration_manager
         self.get_latest_gaze = get_latest_gaze_fn
@@ -75,7 +82,7 @@ class CalibrationUI:
 
         # Iniciar após breve delay
         self.window.after(1000, self.start_sequence)
-        
+
         # Iniciar loop de vídeo
         self.update_video_feed()
 
@@ -88,10 +95,10 @@ class CalibrationUI:
             if frame is not None:
                 # Resize para preencher a tela
                 frame_resized = cv2.resize(frame, (self.width, self.height))
-                
+
                 # Converter para RGB
                 rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                
+
                 # Codificar para PPM (suportado nativamente pelo Tkinter)
                 success, buffer = cv2.imencode(".ppm", rgb)
                 if success:
@@ -99,11 +106,13 @@ class CalibrationUI:
                     self.tk_image = tk.PhotoImage(data=buffer.tobytes())
 
                     if self.video_image_id is None:
-                        self.video_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.tk_image, tags="bg")
-                        self.canvas.lower("bg") # Garantir que fique atrás dos pontos
+                        self.video_image_id = self.canvas.create_image(
+                            0, 0, anchor="nw", image=self.tk_image, tags="bg"
+                        )
+                        self.canvas.lower("bg")  # Garantir que fique atrás dos pontos
                     else:
                         self.canvas.itemconfig(self.video_image_id, image=self.tk_image)
-        
+
         # Agendar próxima atualização (33ms ~ 30 FPS)
         self.window.after(33, self.update_video_feed)
 

@@ -1,47 +1,117 @@
 import numpy as np
+import cv2
 import time
 
 
 class SmoothingFilter:
-    def __init__(self, alpha=0.1, dead_zone=5):
-        self.alpha = alpha
-        self.dead_zone = dead_zone
-        self.prev_x = None
-        self.prev_y = None
+    def __init__(self, process_noise=1.0, measurement_noise=1e-1):
+        """
+        Inicializa o filtro de Kalman para suavização de movimento do mouse.
+
+        Estado: [x, y, dx, dy] (posição e velocidade)
+        Medição: [x, y] (posição observada)
+        """
+        self.kf = cv2.KalmanFilter(4, 2)
+
+        # Matriz de Medição (H): Observamos apenas x e y
+        self.kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
+
+        # Matriz de Transição (F): Será atualizada com dt a cada frame
+        # [[1, 0, dt, 0],
+        #  [0, 1, 0, dt],
+        #  [0, 0, 1,  0],
+        #  [0, 0, 0,  1]]
+        self.kf.transitionMatrix = np.array(
+            [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32
+        )
+
+        # Covariância do Ruído do Processo (Q)
+        # Aumentado para 1.0 para permitir movimentos rápidos (alta agilidade)
+        self.process_noise_base = process_noise
+        self.kf.processNoiseCov = np.eye(4, dtype=np.float32) * process_noise
+
+        # Covariância do Ruído da Medição (R)
+        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * measurement_noise
+
+        # Covariância do Erro a Posteriori (P)
+        self.kf.errorCovPost = np.eye(4, dtype=np.float32)
+
+        self.last_time = None
+        self.first_update = True
+        self.prev_output = None
 
     def update(self, x, y):
-        if self.prev_x is None or self.prev_y is None:
-            self.prev_x = x
-            self.prev_y = y
+        current_time = time.time()
+
+        # Vetor de medição
+        measurement = np.array([[np.float32(x)], [np.float32(y)]])
+
+        # Inicialização no primeiro frame
+        if self.first_update:
+            self.kf.statePost = np.array(
+                [[np.float32(x)], [np.float32(y)], [0], [0]], np.float32
+            )
+            self.last_time = current_time
+            self.first_update = False
+            self.prev_output = (x, y)
             return x, y
 
-        # Calcular distância do movimento
-        dx = x - self.prev_x
-        dy = y - self.prev_y
-        dist = np.sqrt(dx * dx + dy * dy)
+        # Calcular delta tempo (dt)
+        dt = current_time - self.last_time
+        self.last_time = current_time
 
-        # Zona morta
-        if dist < self.dead_zone:
-            return self.prev_x, self.prev_y
+        # Evitar dt zero ou muito grande em casos extremos
+        if dt <= 0:
+            dt = 1.0 / 30.0
+        elif dt > 1.0:
+            dt = 1.0 / 30.0  # Resetar se houver um lag muito grande
 
-        # Aceleração adaptativa
-        # Se o movimento for muito grande, aumenta o alpha para responder mais rápido
-        current_alpha = self.alpha
-        if dist > 100:
-            current_alpha = min(1.0, self.alpha * 2.0)
+        # Atualizar matriz de transição com dt real
+        self.kf.transitionMatrix[0, 2] = dt
+        self.kf.transitionMatrix[1, 3] = dt
 
-        # Filtro EMA
-        new_x = current_alpha * x + (1 - current_alpha) * self.prev_x
-        new_y = current_alpha * y + (1 - current_alpha) * self.prev_y
+        # 1. Predição (baseada no estado anterior e velocidade)
+        prediction = self.kf.predict()
 
-        self.prev_x = new_x
-        self.prev_y = new_y
+        # 2. Correção (atualiza com a nova medição)
+        estimated = self.kf.correct(measurement)
 
-        return new_x, new_y
+        # Extrair posição estimada
+        est_x = estimated[0][0]
+        est_y = estimated[1][0]
+
+        self.prev_output = (est_x, est_y)
+
+        return est_x, est_y
 
     def reset(self):
-        self.prev_x = None
-        self.prev_y = None
+        self.first_update = True
+        self.last_time = None
+        self.kf.statePost = np.zeros((4, 1), np.float32)
+        self.kf.errorCovPost = np.eye(4, dtype=np.float32)
 
     def set_alpha(self, alpha):
-        self.alpha = alpha
+        """
+        Ajusta a suavização dinamicamente.
+        Mantemos a assinatura 'set_alpha' para compatibilidade com o código existente.
+
+        alpha (0.0 a 1.0):
+          - 1.0: Máxima resposta (menor suavização) -> R baixo
+          - 0.0: Máxima suavização (menor resposta) -> R alto
+        """
+        # Clampar alpha
+        alpha = max(0.01, min(1.0, alpha))
+
+        # Mapear alpha para Measurement Noise (R) de forma exponencial
+        # alpha=1.0 -> R ~ 0.001 (segue o input)
+        # alpha=0.5 -> R ~ 0.1
+        # alpha=0.1 -> R ~ 4.0 (suaviza muito)
+
+        # Fórmula: R = 10 ^ ((1-alpha)*4 - 3)
+        # Ex: alpha=1.0 -> 10^-3 = 0.001
+        # Ex: alpha=0.0 -> 10^1 = 10
+
+        exponent = (1.0 - alpha) * 4.0 - 3.0
+        new_r = 10.0**exponent
+
+        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * new_r

@@ -1,6 +1,6 @@
 import pyautogui
 from utils.smoothing import SmoothingFilter
-from config import SCREEN_MARGIN
+from config import SCREEN_MARGIN, EMA_ALPHA
 
 
 class MouseController:
@@ -8,6 +8,7 @@ class MouseController:
         pyautogui.FAILSAFE = False
         self.screen_w, self.screen_h = pyautogui.size()
         self.smoothing = SmoothingFilter()
+        self.smoothing.set_alpha(EMA_ALPHA)
         self.is_dragging = False
 
     def move(self, x, y):

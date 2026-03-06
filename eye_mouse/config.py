@@ -1,6 +1,7 @@
 import os
 import sys
 
+
 def get_resource_path(relative_path):
     """Retorna o caminho absoluto para recursos, funcionando para dev e PyInstaller."""
     try:
@@ -11,6 +12,7 @@ def get_resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+
 def get_user_data_dir():
     """Retorna o diretório para salvar dados do usuário (calibração, logs)."""
     # Usa a pasta Documentos/EyeMouse
@@ -18,6 +20,7 @@ def get_user_data_dir():
     if not os.path.exists(docs_dir):
         os.makedirs(docs_dir)
     return docs_dir
+
 
 # Diretório de dados do usuário
 USER_DATA_DIR = get_user_data_dir()
@@ -49,4 +52,4 @@ SCREEN_MARGIN = 50  # Margem em pixels nas bordas da tela
 
 # Arquivos
 LOG_FILE = os.path.join(USER_DATA_DIR, "eye_mouse.log")
-MODEL_FILE = "face_landmarker.task" # Nome do arquivo de modelo (será resolvido via get_resource_path)
+MODEL_FILE = "face_landmarker.task"  # Nome do arquivo de modelo (será resolvido via get_resource_path)

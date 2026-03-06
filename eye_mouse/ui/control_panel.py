@@ -95,16 +95,18 @@ class ControlPanel:
         # L = Esquerdo, R = Direito
         # Cor vermelha se estiver abaixo do threshold (fechado)
         from config import BLINK_EAR_THRESHOLD
-        
+
         l_color = "red" if left_ear < BLINK_EAR_THRESHOLD else "black"
         r_color = "red" if right_ear < BLINK_EAR_THRESHOLD else "black"
-        
+
         self.eye_status_label.config(
             text=f"EAR E: {left_ear:.3f} | D: {right_ear:.3f}",
-            foreground="black" # Reset default, maybe use distinct labels for colors later
+            foreground="black",  # Reset default, maybe use distinct labels for colors later
         )
         # Hack simples: adicionar asterisco se fechado
         l_status = "*" if left_ear < BLINK_EAR_THRESHOLD else " "
         r_status = "*" if right_ear < BLINK_EAR_THRESHOLD else " "
-        
-        self.eye_status_label.config(text=f"EAR E: {left_ear:.2f}{l_status} | D: {right_ear:.2f}{r_status}")
+
+        self.eye_status_label.config(
+            text=f"EAR E: {left_ear:.2f}{l_status} | D: {right_ear:.2f}{r_status}"
+        )

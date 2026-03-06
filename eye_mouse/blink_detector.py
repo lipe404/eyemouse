@@ -22,7 +22,7 @@ class BlinkDetector:
         self.right_closed_frames = 0
         self.last_blink_time = 0
         self.is_holding = False
-        
+
         # Histórico para suavização do EAR
         self.left_ear_history = deque(maxlen=3)
         self.right_ear_history = deque(maxlen=3)
@@ -57,15 +57,15 @@ class BlinkDetector:
         Retorna: (left_blink, right_blink, double_blink, hold_start, hold_end, ears)
         """
         current_time = time.time()
-        
+
         # Calcular EAR bruto
         raw_left_ear = self.calculate_ear(landmarks, self.LEFT_EYE_IDXS, img_w, img_h)
         raw_right_ear = self.calculate_ear(landmarks, self.RIGHT_EYE_IDXS, img_w, img_h)
-        
+
         # Suavização (Média Móvel)
         self.left_ear_history.append(raw_left_ear)
         self.right_ear_history.append(raw_right_ear)
-        
+
         left_ear = np.mean(self.left_ear_history)
         right_ear = np.mean(self.right_ear_history)
 
@@ -80,7 +80,7 @@ class BlinkDetector:
 
         if left_closed:
             self.left_closed_frames += 1
-            
+
             # Verificar início de hold (arrastar)
             # 30 FPS * HOLD_DURATION_SEC
             if self.left_closed_frames > (30 * HOLD_DURATION_SEC):
@@ -99,12 +99,12 @@ class BlinkDetector:
                     # Verifica cooldown apenas para cliques
                     if current_time - self.last_blink_time > BLINK_COOLDOWN_SEC:
                         left_action = True
-            
+
             self.left_closed_frames = 0
 
         # --- Lógica Olho Direito (Clique Direito) ---
         right_action = False
-        
+
         if right_closed:
             self.right_closed_frames += 1
         else:

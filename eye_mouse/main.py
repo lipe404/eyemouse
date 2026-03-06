@@ -36,7 +36,7 @@ class EyeMouseApp:
 
         # Estado compartilhado
         self.latest_gaze_raw = None  # (x, y) normalizado
-        self.latest_frame = None # Frame da câmera com anotações
+        self.latest_frame = None  # Frame da câmera com anotações
         self.last_face_time = 0
         self.fps = 0
 
@@ -98,7 +98,7 @@ class EyeMouseApp:
             self.calibration_manager,
             self.get_latest_gaze_raw,
             self.on_calibration_complete,
-            lambda: self.latest_frame
+            lambda: self.latest_frame,
         )
 
     def on_calibration_complete(self):

@@ -11,9 +11,9 @@ class GazeTracker:
     def __init__(self, model_filename=MODEL_FILE):
         # Localizar o arquivo .task usando helper que suporta PyInstaller
         model_path = get_resource_path(model_filename)
-        
+
         if not os.path.exists(model_path):
-             raise FileNotFoundError(f"Modelo não encontrado em: {model_path}")
+            raise FileNotFoundError(f"Modelo não encontrado em: {model_path}")
 
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(
@@ -89,10 +89,14 @@ class GazeTracker:
         # Desenhar contorno dos olhos (índices aproximados do MediaPipe)
         # Olho esquerdo: 33, 133, 160, 159, 158, 144, 145, 153
         left_eye_indices = [33, 133, 160, 159, 158, 144, 145, 153]
-        pts_left = np.array([to_pixel(landmarks[i]) for i in left_eye_indices], np.int32)
+        pts_left = np.array(
+            [to_pixel(landmarks[i]) for i in left_eye_indices], np.int32
+        )
         cv2.polylines(frame, [pts_left], True, (255, 255, 0), 1)
 
         # Olho direito: 362, 263, 387, 386, 385, 373, 374, 380
         right_eye_indices = [362, 263, 387, 386, 385, 373, 374, 380]
-        pts_right = np.array([to_pixel(landmarks[i]) for i in right_eye_indices], np.int32)
+        pts_right = np.array(
+            [to_pixel(landmarks[i]) for i in right_eye_indices], np.int32
+        )
         cv2.polylines(frame, [pts_right], True, (255, 255, 0), 1)
