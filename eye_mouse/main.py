@@ -6,6 +6,7 @@ from tkinter import messagebox, simpledialog
 import numpy as np
 import logging
 import sys
+import queue
 
 from gaze_tracker import GazeTracker
 from blink_detector import BlinkDetector
@@ -43,11 +44,16 @@ class EyeMouseApp:
         self.calibration_ui = None
         self.control_panel = None
 
-        # Estado compartilhado
+        # Estado compartilhado (Thread-Safe - Melhoria 16)
+        self.data_lock = threading.Lock()
         self.latest_gaze_raw = None  # (x, y) normalizado
         self.latest_frame = None  # Frame da câmera com anotações
         self.last_face_time = 0
         self.fps = 0
+        
+        # Fila de frames (Câmera -> Processamento - Melhoria 17)
+        # Maxsize pequeno para garantir baixa latência (drop frame se processamento lento)
+        self.frame_queue = queue.Queue(maxsize=1)
 
         # Inicializar módulos
         try:
@@ -88,10 +94,16 @@ class EyeMouseApp:
         else:
             self.start_calibration()
 
-        # Iniciar thread de rastreamento
+        # Iniciar threads (Melhoria 17)
         self.running = True
-        self.tracker_thread = threading.Thread(target=self.tracking_loop, daemon=True)
-        self.tracker_thread.start()
+        
+        # Thread produtora (Câmera)
+        self.camera_thread = threading.Thread(target=self.camera_loop, daemon=True)
+        self.camera_thread.start()
+        
+        # Thread consumidora (Processamento)
+        self.processing_thread = threading.Thread(target=self.processing_loop, daemon=True)
+        self.processing_thread.start()
 
         # Loop de atualização da UI (Status)
         self.root.after(500, self.update_ui_loop)
@@ -109,7 +121,7 @@ class EyeMouseApp:
             self.calibration_manager,
             self.get_latest_gaze_raw,
             self.on_calibration_complete,
-            lambda: self.latest_frame,
+            self.get_latest_frame,
         )
 
     def start_blink_calibration(self):
@@ -178,7 +190,14 @@ class EyeMouseApp:
             )
 
     def get_latest_gaze_raw(self):
-        return self.latest_gaze_raw
+        with self.data_lock:
+            return self.latest_gaze_raw
+
+    def get_latest_frame(self):
+        with self.data_lock:
+            if self.latest_frame is not None:
+                return self.latest_frame.copy()
+            return None
 
     def toggle_pause(self, paused):
         self.is_paused = paused
@@ -202,31 +221,57 @@ class EyeMouseApp:
 
         self.root.after(500, self.update_ui_loop)
 
-    def tracking_loop(self):
-        last_time = time.time()
-        frame_count = 0
-
+    def camera_loop(self):
+        """Thread produtora: Captura frames da câmera."""
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
+                time.sleep(0.1)
+                continue
+            
+            # Melhoria 16: Fila thread-safe com drop de frames antigos
+            if self.frame_queue.full():
+                try:
+                    self.frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            self.frame_queue.put(frame)
+
+    def processing_loop(self):
+        """Thread consumidora: Processa frames e controla mouse."""
+        last_time = time.time()
+
+        while self.running:
+            try:
+                frame = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
             current_time = time.time()
 
+            # Melhoria 18: Reduzir resolução para processamento (320x240)
+            # O MediaPipe e GazeTracker trabalham com coords normalizadas,
+            # então não é necessário ajustar escala dos resultados.
+            small_frame = cv2.resize(frame, (320, 240))
+
             # Processamento
-            left_iris, right_iris, landmarks = self.gaze_tracker.process_frame(frame)
+            left_iris, right_iris, landmarks = self.gaze_tracker.process_frame(small_frame)
 
             if landmarks:
-                # Desenhar debug no frame para a UI
+                # Desenhar debug no frame ORIGINAL (640x480)
+                # Como landmarks são normalizados, draw_debug funciona em qualquer resolução
                 self.gaze_tracker.draw_debug(frame, landmarks)
-                self.latest_frame = frame.copy()
+                with self.data_lock:
+                    self.latest_frame = frame.copy()
 
             if left_iris is not None and right_iris is not None:
                 self.last_face_time = current_time
 
                 # Calcular ponto médio das íris (raw)
                 avg_iris = (left_iris + right_iris) / 2.0
-                self.latest_gaze_raw = avg_iris
+                
+                with self.data_lock:
+                    self.latest_gaze_raw = avg_iris
 
                 # Se estiver calibrando, o UI coleta os dados via get_latest_gaze_raw
                 # Se NÃO estiver calibrando e NÃO estiver pausado, controla o mouse
@@ -272,12 +317,6 @@ class EyeMouseApp:
                         )
 
             last_time = current_time
-            frame_count += 1
-
-            # Manter framerate alvo
-            elapsed = time.time() - current_time
-            wait = max(1, int((1.0 / TARGET_FPS - elapsed) * 1000))
-            time.sleep(wait / 1000.0)
 
 if __name__ == "__main__":
     app = EyeMouseApp()
