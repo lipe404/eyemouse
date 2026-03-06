@@ -2,7 +2,7 @@ import cv2
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 import numpy as np
 import logging
 import sys
@@ -28,6 +28,15 @@ class EyeMouseApp:
         self.root = tk.Tk()
         self.root.withdraw()  # Esconder janela principal raiz
 
+        # Solicitar perfil de usuário (Melhoria 15)
+        self.user_profile = simpledialog.askstring(
+            "Perfil de Usuário", 
+            "Digite seu nome (ou deixe em branco para 'default'):", 
+            parent=self.root
+        )
+        if not self.user_profile:
+            self.user_profile = "default"
+
         self.running = False
         self.is_paused = False
         self.is_calibrating = False
@@ -44,9 +53,10 @@ class EyeMouseApp:
         try:
             self.gaze_tracker = GazeTracker()
             self.blink_detector = BlinkDetector()
-            self.calibration_manager = CalibrationManager()
+            # Inicializar com perfil selecionado
+            self.calibration_manager = CalibrationManager(profile_name=self.user_profile)
             self.mouse_controller = MouseController()
-            logging.info("Módulos inicializados com sucesso.")
+            logging.info(f"Módulos inicializados com sucesso. Perfil: {self.user_profile}")
         except Exception as e:
             logging.error(f"Erro ao inicializar módulos: {e}")
             messagebox.showerror("Erro Fatal", f"Falha ao iniciar: {e}")
@@ -68,7 +78,8 @@ class EyeMouseApp:
         # Verificar Calibração
         if self.calibration_manager.load_calibration():
             use_calib = messagebox.askyesno(
-                "Calibração Encontrada", "Deseja usar a calibração salva?"
+                "Calibração Encontrada", 
+                f"Calibração encontrada para '{self.user_profile}'. Deseja usar?"
             )
             if not use_calib:
                 self.start_calibration()
@@ -110,7 +121,42 @@ class EyeMouseApp:
             "O sistema ajustará a sensibilidade automaticamente."
         )
 
-    def on_calibration_complete(self):
+    def on_calibration_complete(self, cancelled=False):
+        if cancelled:
+            self.is_calibrating = False
+            self.is_paused = False
+            logging.info("Calibração cancelada pelo usuário.")
+            if self.control_panel:
+                self.control_panel.window.deiconify()
+            else:
+                self.show_control_panel()
+            return
+
+        # Calcular e validar calibração (Melhoria 12)
+        success, error = self.calibration_manager.compute_calibration()
+        
+        if success:
+            if error > CALIBRATION_REPROJECTION_ERROR_THRESHOLD:
+                retry = messagebox.askyesno(
+                    "Calibração Imprecisa",
+                    f"A qualidade da calibração está baixa (Erro: {error:.1f}px).\n"
+                    f"Recomendado: < {CALIBRATION_REPROJECTION_ERROR_THRESHOLD}px.\n\n"
+                    "Deseja tentar novamente?"
+                )
+                if retry:
+                    # Reiniciar calibração
+                    self.start_calibration()
+                    return
+            else:
+                messagebox.showinfo(
+                    "Sucesso", 
+                    f"Calibração concluída com sucesso!\nErro médio: {error:.1f}px"
+                )
+        else:
+            messagebox.showerror("Erro", "Falha ao computar calibração. Tente novamente.")
+            self.start_calibration()
+            return
+
         self.is_calibrating = False
         self.is_paused = False
         logging.info("Calibração concluída.")
@@ -200,54 +246,30 @@ class EyeMouseApp:
                         self.blink_detector.process(landmarks, img_w, img_h)
                     )
 
-                    # Ações
-                    if d_blink:
-                        logging.info("Duplo Clique")
-                        self.mouse_controller.double_click()
-                    elif l_blink:
-                        logging.info("Clique Esquerdo")
+                    # Ações do Mouse
+                    if l_blink:
                         self.mouse_controller.click("left")
-                    elif r_blink:
-                        logging.info("Clique Direito")
+                    if r_blink:
                         self.mouse_controller.click("right")
-
+                    if d_blink:
+                        self.mouse_controller.double_click()
+                    
                     if hold_start:
-                        logging.info("Iniciar Arraste")
                         self.mouse_controller.start_drag()
-                    elif hold_end:
-                        logging.info("Soltar Arraste")
+                    if hold_end:
                         self.mouse_controller.stop_drag()
-
-                    # Atualizar UI status (FPS e Olhos)
+                        
+                    # Atualizar UI
+                    fps = int(1.0 / (current_time - last_time)) if current_time > last_time else 0
                     if self.control_panel:
-                        # Atualizar a cada X frames para não travar a UI thread
-                        if frame_count % 5 == 0:
-                            # Calcular FPS
-                            dt = current_time - last_time
-                            fps = 0
-                            if dt > 0:
-                                fps = 1.0 / dt
-
-                            l_ear, r_ear = ears
-                            
-                            # Obter threshold atual para UI
-                            current_thresh = self.blink_detector.ear_threshold
-
-                            # Executar atualização na thread principal
-                            # Usamos lambda com argumentos default para capturar valores
-                            self.root.after(
-                                0,
-                                lambda f=fps, l=l_ear, r=r_ear, t=current_thresh: self.control_panel.update_status(
-                                    f, l, r, t
-                                ),
-                            )
-
-            else:
-                # Face perdida
-                if current_time - self.last_face_time > 2.0:
-                    if not self.is_paused and not self.is_calibrating:
-                        # Auto-pause por segurança
-                        pass
+                        # Passar threshold atual para UI
+                        current_thresh = self.blink_detector.ear_threshold
+                        self.root.after(
+                            0,
+                            lambda f=fps, l=ears[0], r=ears[1], t=current_thresh: self.control_panel.update_status(
+                                f, l, r, t
+                            ),
+                        )
 
             last_time = current_time
             frame_count += 1
@@ -257,10 +279,6 @@ class EyeMouseApp:
             wait = max(1, int((1.0 / TARGET_FPS - elapsed) * 1000))
             time.sleep(wait / 1000.0)
 
-    def run(self):
-        self.root.mainloop()
-
-
 if __name__ == "__main__":
     app = EyeMouseApp()
-    app.run()
+    app.root.mainloop()

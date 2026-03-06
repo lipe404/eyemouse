@@ -3,7 +3,7 @@ import time
 from threading import Thread
 import numpy as np
 import cv2
-from config import SCREEN_MARGIN, CALIBRATION_FRAMES_PER_POINT
+from config import SCREEN_MARGIN, CALIBRATION_FRAMES_PER_POINT, CALIBRATION_POINTS
 
 
 class CalibrationUI:
@@ -43,29 +43,31 @@ class CalibrationUI:
         )
         self.canvas.pack(fill="both", expand=True)
 
-        # Pontos de calibração (grade 3x3 com margem)
+        # Pontos de calibração (grade NxN com margem) - Melhoria 13
         margin = SCREEN_MARGIN
         w, h = self.width, self.height
-        cx, cy = w // 2, h // 2
-
-        self.points = [
-            (margin, margin),
-            (cx, margin),
-            (w - margin, margin),
-            (margin, cy),
-            (cx, cy),
-            (w - margin, cy),
-            (margin, h - margin),
-            (cx, h - margin),
-            (w - margin, h - margin),
-        ]
+        
+        # Determinar tamanho da grade (NxN)
+        grid_size = int(np.sqrt(CALIBRATION_POINTS))
+        if grid_size * grid_size != CALIBRATION_POINTS:
+            grid_size = 4 # Fallback padrão 4x4
+            
+        self.points = []
+        for i in range(grid_size):
+            for j in range(grid_size):
+                # Calcular x, y distribuídos uniformemente
+                x = margin + (j * (w - 2 * margin) / (grid_size - 1))
+                y = margin + (i * (h - 2 * margin) / (grid_size - 1))
+                self.points.append((int(x), int(y)))
 
         self.current_point_idx = 0
         self.frames_collected = 0
         self.max_frames = CALIBRATION_FRAMES_PER_POINT
         self.is_collecting = False
+        self.animation_start_time = 0
 
         # Elementos da UI
+        cx, cy = w // 2, h // 2
         self.instruction = self.canvas.create_text(
             cx,
             cy - 100,
@@ -79,6 +81,9 @@ class CalibrationUI:
         self.progress_bar_fill = self.canvas.create_rectangle(
             cx - 100, cy + 100, cx - 100, cy + 120, fill="green", outline=""
         )
+
+        # Handle window close (X button)
+        self.window.protocol("WM_DELETE_WINDOW", self.on_user_close)
 
         # Iniciar após breve delay
         self.window.after(1000, self.start_sequence)
@@ -117,6 +122,8 @@ class CalibrationUI:
         self.window.after(33, self.update_video_feed)
 
     def start_sequence(self):
+        # Limpar pontos anteriores do manager
+        self.calib_manager.clear_points()
         self.show_point()
 
     def show_point(self):
@@ -128,20 +135,56 @@ class CalibrationUI:
 
         # Limpar canvas (exceto textos fixos se houver)
         self.canvas.delete("target")
+        self.canvas.delete("countdown")
 
-        # Desenhar alvo
-        r = 20
+        # Iniciar animação (Melhoria 14)
+        self.animation_start_time = time.time()
+        self.animate_point(x, y)
+
+    def animate_point(self, x, y):
+        # Duração da animação/countdown antes de coletar
+        ANIMATION_DURATION = 1.5 
+        
+        elapsed = time.time() - self.animation_start_time
+        remaining = ANIMATION_DURATION - elapsed
+        
+        if remaining <= 0:
+            # Fim da animação, começar coleta
+            self.canvas.delete("target")
+            self.canvas.delete("countdown")
+            
+            # Desenhar ponto fixo final
+            r = 20
+            self.canvas.create_oval(
+                x - r, y - r, x + r, y + r, fill="red", outline="white", tags="target"
+            )
+            self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5, fill="white", tags="target")
+            
+            # Iniciar coleta
+            self.frames_collected = 0
+            self.update_progress(0)
+            self.start_collection()
+            return
+
+        # Animação pulsante (15px a 25px)
+        pulse = np.sin(elapsed * 10) # Oscilação
+        r = 20 + (pulse * 5)
+        
+        self.canvas.delete("target")
         self.canvas.create_oval(
             x - r, y - r, x + r, y + r, fill="red", outline="white", tags="target"
         )
         self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5, fill="white", tags="target")
-
-        # Resetar contadores
-        self.frames_collected = 0
-        self.update_progress(0)
-
-        # Aguardar um pouco para o usuário focar (500ms)
-        self.window.after(500, self.start_collection)
+        
+        # Countdown visual
+        self.canvas.delete("countdown")
+        count_val = int(remaining) + 1
+        self.canvas.create_text(
+            x, y, text=str(count_val), fill="white", font=("Arial", 12, "bold"), tags="countdown"
+        )
+        
+        # Próximo frame da animação
+        self.window.after(33, lambda: self.animate_point(x, y))
 
     def start_collection(self):
         self.is_collecting = True
@@ -161,14 +204,6 @@ class CalibrationUI:
         gaze_data = self.get_latest_gaze()
 
         if gaze_data is not None:
-            # gaze_data deve ser (left_iris, right_iris) ou similar
-            # Vamos assumir que get_latest_gaze retorna um array numpy ou tupla (x, y) combinado
-            # Se retornar None, ignoramos este frame
-
-            # Adicionar ao gerenciador de calibração
-            # Precisamos normalizar o gaze_data? O CalibrationManager espera o raw iris coords.
-            # E espera o screen coord correspondente.
-
             # Recuperar coordenadas da tela do ponto atual
             screen_x, screen_y = self.points[self.current_point_idx]
 
@@ -198,34 +233,19 @@ class CalibrationUI:
         self.canvas.create_text(
             self.width // 2,
             self.height // 2,
-            text="Calibrando...",
+            text="Calculando calibração...",
             fill="white",
             font=("Arial", 24),
         )
         self.window.update()
-
-        success = self.calib_manager.compute_calibration()
-
-        if success:
-            self.canvas.create_text(
-                self.width // 2,
-                self.height // 2 + 50,
-                text="Sucesso!",
-                fill="green",
-                font=("Arial", 20),
-            )
-        else:
-            self.canvas.create_text(
-                self.width // 2,
-                self.height // 2 + 50,
-                text="Falha na calibração",
-                fill="red",
-                font=("Arial", 20),
-            )
-
-        self.window.after(1000, self.close)
+        
+        # Chamar callback (o processamento real é feito no main agora para validar)
+        self.window.after(100, self.close)
 
     def close(self):
         self.window.destroy()
-        if self.on_complete:
-            self.on_complete()
+        self.on_complete(cancelled=False)
+
+    def on_user_close(self):
+        self.window.destroy()
+        self.on_complete(cancelled=True)

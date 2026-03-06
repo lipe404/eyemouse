@@ -47,9 +47,10 @@ BLINK_REFLEX_OPEN_SPEED = 0.08 # Velocidade de abertura (EAR/frame) acima disso 
 BLINK_INTENTIONAL_OPEN_SPEED = 0.05 # Abaixo disso é intencional
 
 # Calibração
-CALIBRATION_POINTS = 9
+CALIBRATION_POINTS = 16  # Aumentado para 16 (4x4)
 CALIBRATION_FRAMES_PER_POINT = 30
-CALIBRATION_FILE = os.path.join(USER_DATA_DIR, "calibration_data.npy")
+CALIBRATION_REPROJECTION_ERROR_THRESHOLD = 80  # Erro máximo aceitável em pixels
+CALIBRATION_FILE_PREFIX = os.path.join(USER_DATA_DIR, "calibration_")
 
 # Tela
 SCREEN_MARGIN = 50  # Margem em pixels nas bordas da tela
