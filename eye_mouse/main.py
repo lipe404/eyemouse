@@ -18,11 +18,20 @@ from ui.control_panel import ControlPanel
 from config import *
 
 # Configuração de Log
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+# No Windows, evitar Bad file descriptor em subprocessos ou threads complexas
+try:
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+except OSError:
+    # Fallback para stream handler se arquivo falhar (comum em sandboxes)
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
 
 
 class EyeMouseApp:
