@@ -265,6 +265,7 @@ Teste de integracao com frame sintetico.
 P9 (clamp de bordas) e P10 (allow_pickle).
 **Dependencias:** Milestone 1 concluido.
 **Estimativa:** 2-3 dias.
+**Status:** CONCLUÍDO (2026-09-16)
 
 ### 3.1 — Deduplicacao de Amostras (P4)
 

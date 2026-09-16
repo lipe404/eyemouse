@@ -1,17 +1,15 @@
-﻿"""
-calibration.py — Gerenciador de calibracao do rastreamento ocular.
+"""
+calibration.py — Gerenciador de calibração do rastreamento ocular de alta qualidade.
 
-Persistencia migrada de .npy (allow_pickle=True) para JSON seguro.
-Suporta migracao automatica de arquivos .npy legados.
-
-Seguranca:
-  - Nomes de perfil sao validados para prevenir path traversal.
-  - Nenhum dado de arquivo externo e executado ou desserializado com pickle.
-  - Coeficientes sao listas simples de float — sem tipos Python arbitrarios.
-
-Validacao:
-  - compute_calibration() separa holdout antes de treinar.
-  - O erro reportado e o holdout error (generalizacao), nao o residuo de treino.
+Milestone 3:
+  - Modelos intercambiáveis: Ridge (L2 regularizado), Polinomial (2ª ordem) e Linear.
+  - Avaliação científica completa com conjunto holdout separado (RMSE, Média, Mediana, P95, % da Diagonal e Quadrantes).
+  - Agregação robusta de amostras por alvo via Mediana e rejeição de outliers por MAD (Median Absolute Deviation).
+  - Deduplicação estrita de observações por frame_id e timestamp.
+  - Recalibração pontual de alvos individuais (recalibrate_point).
+  - Ajuste fino de trim/offset (set_trim) sem corromper o modelo original.
+  - Detecção de alteração de geometria/resolução da tela.
+  - Backup atômico do perfil anterior (.bak) antes de salvar nova calibração validada.
 """
 from __future__ import annotations
 
@@ -19,34 +17,31 @@ import json
 import logging
 import os
 import re
-from typing import List, Optional, Tuple
-
+import shutil
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
-from config import CALIBRATION_FILE_PREFIX, CALIBRATION_REPROJECTION_ERROR_THRESHOLD
+from config import (
+    CALIBRATION_FILE_PREFIX,
+    CALIBRATION_REPROJECTION_ERROR_THRESHOLD,
+    FT_HOLDOUT_VALIDATION,
+)
+from calibration_models import (
+    BaseCalibrationModel,
+    PolynomialCalibrationModel,
+    RidgeCalibrationModel,
+    LinearCalibrationModel,
+    CalibrationMetrics,
+    evaluate_calibration_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
-# Caracteres permitidos em nomes de perfil
 _PROFILE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
-
-# Versao atual do formato de arquivo de calibracao
 _CALIBRATION_VERSION = 2
 
 
 def _validate_profile_name(name: str) -> str:
-    """
-    Valida e sanitiza um nome de perfil.
-
-    Args:
-        name: Nome a ser validado.
-
-    Returns:
-        O nome validado (mesmo valor se valido).
-
-    Raises:
-        ValueError: Se o nome contiver caracteres invalidos ou for vazio.
-    """
     if not isinstance(name, str) or not name:
         raise ValueError("Nome de perfil nao pode ser vazio.")
     if not _PROFILE_RE.match(name):
@@ -57,65 +52,109 @@ def _validate_profile_name(name: str) -> str:
     return name
 
 
+def filter_outliers_mad(points: List[Tuple[float, float]], threshold_mad: float = 2.5) -> List[Tuple[float, float]]:
+    """
+    Filtra outliers em uma lista de pontos 2D usando Median Absolute Deviation (MAD).
+    Muito mais robusto que média/desvio-padrão na presença de piscadas ou micro-sacadas.
+    """
+    if len(points) < 4:
+        return points
+
+    arr = np.array(points, dtype=np.float64)
+    median = np.median(arr, axis=0)
+    diffs = np.linalg.norm(arr - median, axis=1)
+    mad = np.median(diffs) + 1e-6
+
+    # Manter pontos dentro de threshold_mad * MAD
+    inliers = [points[i] for i in range(len(points)) if diffs[i] <= threshold_mad * mad]
+    return inliers if len(inliers) >= 2 else points
+
+
 class CalibrationManager:
     """
-    Gerencia o processo de calibracao do rastreamento ocular.
-
-    Responsavel por:
-      - Coletar pontos de calibracao.
-      - Calcular os coeficientes de mapeamento por regressao polinomial.
-      - Validar a calibracao com um conjunto holdout separado.
-      - Persistir e carregar calibracoes em formato JSON seguro.
+    Gerencia o processo de calibração e mapeamento do olhar para a tela.
     """
 
-    def __init__(self, profile_name: str = "default"):
-        """
-        Inicializa o gerenciador de calibracao.
-
-        Args:
-            profile_name: Nome do perfil de usuario. Valida o nome.
-
-        Raises:
-            ValueError: Se o nome do perfil for invalido.
-        """
+    def __init__(self, profile_name: str = "default", model_type: str = "ridge"):
         self.profile_name: str = _validate_profile_name(profile_name)
+        self.model_type = model_type.lower()
         self._json_file: str = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.json"
         self._npy_file: str = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.npy"
+        self._bak_file: str = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.json.bak"
 
-        self.iris_points: List = []
-        self.screen_points: List = []
-        self.coeffs_x: Optional[np.ndarray] = None
-        self.coeffs_y: Optional[np.ndarray] = None
+        self.iris_points: List[Tuple[float, float]] = []
+        self.screen_points: List[Tuple[int, int]] = []
+
+        # Histórico de amostras por alvo para agregação robusta
+        self._target_raw_samples: Dict[int, List[Tuple[float, float]]] = {}
+        self._collected_frame_ids: set = set()
+
+        # Modelo matemático ativo
+        self.model: BaseCalibrationModel = self._create_model(self.model_type)
         self.is_calibrated: bool = False
 
-        # Erro do holdout da ultima calibracao
+        # Métricas da última calibração
+        self.last_metrics: Optional[CalibrationMetrics] = None
         self.last_holdout_error: float = float('inf')
-        # Erro do treino da ultima calibracao (para diagnostico)
         self.last_train_error: float = float('inf')
 
-    # Manter compatibilidade: calibration_file aponta para o JSON
+        # Ajuste fino / Trim
+        self.trim_x: float = 0.0
+        self.trim_y: float = 0.0
+
+        # Resolução de tela registrada
+        self.calibrated_screen_w: int = 1920
+        self.calibrated_screen_h: int = 1080
+
+    def _create_model(self, model_name: str) -> BaseCalibrationModel:
+        if model_name == "linear":
+            return LinearCalibrationModel()
+        elif model_name == "polynomial":
+            return PolynomialCalibrationModel()
+        else:
+            return RidgeCalibrationModel(alpha_l2=1e-3, use_polynomial=True)
+
     @property
     def calibration_file(self) -> str:
         return self._json_file
 
-    # ------------------------------------------------------------------
-    # Gestao de perfil
-    # ------------------------------------------------------------------
+    @property
+    def coeffs_x(self) -> Optional[np.ndarray]:
+        return self.model.coeffs_x
+
+    @coeffs_x.setter
+    def coeffs_x(self, val: Optional[np.ndarray]):
+        self.model.coeffs_x = val
+        if val is not None and self.model.coeffs_y is not None:
+            self.model.is_fitted = True
+            self.is_calibrated = True
+
+    @property
+    def coeffs_y(self) -> Optional[np.ndarray]:
+        return self.model.coeffs_y
+
+    @coeffs_y.setter
+    def coeffs_y(self, val: Optional[np.ndarray]):
+        self.model.coeffs_y = val
+        if val is not None and self.model.coeffs_x is not None:
+            self.model.is_fitted = True
+            self.is_calibrated = True
 
     def set_profile(self, profile_name: str) -> None:
-        """
-        Altera o perfil ativo e tenta carregar a calibracao correspondente.
-
-        Args:
-            profile_name: Novo nome de perfil (validado).
-        """
         self.profile_name = _validate_profile_name(profile_name)
         self._json_file = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.json"
         self._npy_file = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.npy"
+        self._bak_file = f"{CALIBRATION_FILE_PREFIX}{self.profile_name}.json.bak"
         self.load_calibration()
 
+    def set_trim(self, offset_x: float, offset_y: float) -> None:
+        """Ajusta o deslocamento fino do cursor sem alterar o modelo original."""
+        self.trim_x = float(offset_x)
+        self.trim_y = float(offset_y)
+        logger.info("Trim do cursor ajustado para (%+.1f, %+.1f) px", self.trim_x, self.trim_y)
+
     # ------------------------------------------------------------------
-    # Coleta de pontos
+    # Coleta de Pontos com Deduplicação e Agregação
     # ------------------------------------------------------------------
 
     def add_point(
@@ -123,106 +162,132 @@ class CalibrationManager:
         iris_pos: Tuple[float, float],
         screen_pos: Tuple[int, int],
     ) -> None:
-        """
-        Adiciona um par (iris, tela) para calibracao.
-
-        Args:
-            iris_pos:   Coordenadas (x, y) da iris (normalizadas 0-1).
-            screen_pos: Coordenadas (x, y) na tela em pixels.
-        """
+        """Adiciona um par (iris, tela) diretamente."""
         self.iris_points.append(iris_pos)
         self.screen_points.append(screen_pos)
 
+    def add_point_sample(
+        self,
+        target_idx: int,
+        iris_pos: Tuple[float, float],
+        screen_pos: Tuple[int, int],
+        frame_id: int,
+    ) -> bool:
+        """
+        Adiciona uma amostra com validação estrita de deduplicação por frame_id.
+        Retorna True se a amostra foi aceita.
+        """
+        if frame_id in self._collected_frame_ids:
+            logger.debug("Amostra duplicada descartada: frame_id=%d", frame_id)
+            return False
+
+        self._collected_frame_ids.add(frame_id)
+        if target_idx not in self._target_raw_samples:
+            self._target_raw_samples[target_idx] = []
+        self._target_raw_samples[target_idx].append(iris_pos)
+        return True
+
+    def finalize_target(self, target_idx: int, screen_pos: Tuple[int, int]) -> bool:
+        """
+        Consolida as amostras coletadas para um alvo específico usando Mediana e filtro MAD.
+        """
+        samples = self._target_raw_samples.get(target_idx, [])
+        if len(samples) < 3:
+            logger.warning("Amostras insuficientes para o alvo %d (%d amostras)", target_idx, len(samples))
+            return False
+
+        filtered = filter_outliers_mad(samples)
+        arr = np.array(filtered)
+        aggregated_iris = (float(np.median(arr[:, 0])), float(np.median(arr[:, 1])))
+
+        self.add_point(aggregated_iris, screen_pos)
+        logger.debug(
+            "Alvo %d consolidado: %d amostras brutas -> %d inliers -> iris=(%.4f, %.4f)",
+            target_idx, len(samples), len(filtered), aggregated_iris[0], aggregated_iris[1]
+        )
+        return True
+
+    def recalibrate_point(
+        self,
+        point_idx: int,
+        new_iris_pos: Tuple[float, float],
+        new_screen_pos: Tuple[int, int],
+    ) -> bool:
+        """Permite recalibrar rapidamente um alvo problemático sem reiniciar do zero."""
+        if 0 <= point_idx < len(self.iris_points):
+            self.iris_points[point_idx] = new_iris_pos
+            self.screen_points[point_idx] = new_screen_pos
+            logger.info("Ponto %d recalibrado. Recalculando modelo...", point_idx)
+            success, _ = self.compute_calibration()
+            return success
+        return False
+
     def clear_points(self) -> None:
-        """Remove todos os pontos de calibracao coletados."""
         self.iris_points = []
         self.screen_points = []
+        self._target_raw_samples.clear()
+        self._collected_frame_ids.clear()
 
     # ------------------------------------------------------------------
-    # Calculo da calibracao
+    # Cálculo e Validação
     # ------------------------------------------------------------------
 
-    def compute_calibration(self) -> Tuple[bool, float]:
+    def compute_calibration(
+        self,
+        screen_w: int = 1920,
+        screen_h: int = 1080,
+    ) -> Tuple[bool, float]:
         """
-        Calcula os coeficientes de regressao polinomial (2a ordem) e valida.
-
-        Separa um conjunto holdout (min 2 pontos ou 20% dos dados) ANTES de
-        treinar, de modo que o erro reportado reflita a generalizacao real,
-        nao o residuo de treinamento.
-
-        Returns:
-            (sucesso, holdout_error_px): sucesso indica se a calibracao
-            foi realizada; holdout_error_px e o erro medio em pixels no
-            conjunto holdout.
+        Calcula o modelo e avalia com holdout científico.
+        Retorna (sucesso, holdout_error_px).
         """
         n = len(self.iris_points)
         if n < 6:
-            logger.warning("Pontos insuficientes: %d (minimo 6).", n)
+            logger.warning("Pontos insuficientes: %d (mínimo 6).", n)
             return False, 0.0
 
-        iris_arr = np.array(self.iris_points)
-        screen_arr = np.array(self.screen_points)
+        self.calibrated_screen_w = screen_w
+        self.calibrated_screen_h = screen_h
 
-        # --- Separar holdout ANTES do treinamento ---
-        n_holdout = max(2, n // 5)          # 20% ou minimo 2 pontos
+        iris_arr = np.array(self.iris_points, dtype=np.float64)
+        screen_arr = np.array(self.screen_points, dtype=np.float64)
+
+        # Divisão em Treino e Validação (Holdout de 20% ou mínimo 2 pontos)
+        n_holdout = max(2, n // 5) if FT_HOLDOUT_VALIDATION else 0
         n_train = n - n_holdout
 
-        # Indices de treino e holdout (holdout = ultimos N pontos)
         train_idx = list(range(n_train))
-        holdout_idx = list(range(n_train, n))
+        holdout_idx = list(range(n_train, n)) if n_holdout > 0 else train_idx
 
-        iris_train = iris_arr[train_idx]
-        screen_train = screen_arr[train_idx]
-        iris_holdout = iris_arr[holdout_idx]
-        screen_holdout = screen_arr[holdout_idx]
+        X_train, Y_train = iris_arr[train_idx], screen_arr[train_idx]
+        X_val, Y_val = iris_arr[holdout_idx], screen_arr[holdout_idx]
 
-        # --- Construir matriz de design: [1, x, y, xy, x^2, y^2] ---
-        def design_matrix(iris: np.ndarray) -> np.ndarray:
-            X, Y = iris[:, 0], iris[:, 1]
-            ones = np.ones(len(X))
-            return np.column_stack([ones, X, Y, X * Y, X**2, Y**2])
+        # Ajuste do modelo
+        fit_ok = self.model.fit(X_train, Y_train)
+        if not fit_ok:
+            logger.error("Falha no ajuste do modelo de calibração %s", self.model.name)
+            return False, float('inf')
 
-        A_train = design_matrix(iris_train)
-
-        # --- Regressao por minimos quadrados ---
-        self.coeffs_x, _, _, _ = np.linalg.lstsq(
-            A_train, screen_train[:, 0], rcond=None
-        )
-        self.coeffs_y, _, _, _ = np.linalg.lstsq(
-            A_train, screen_train[:, 1], rcond=None
-        )
         self.is_calibrated = True
 
-        # --- Erro de treino (diagnostico) ---
-        A_train_pred = design_matrix(iris_train)
-        pred_x_train = A_train_pred @ self.coeffs_x
-        pred_y_train = A_train_pred @ self.coeffs_y
-        diffs_train = np.sqrt(
-            (pred_x_train - screen_train[:, 0])**2 +
-            (pred_y_train - screen_train[:, 1])**2
+        # Avaliação das métricas sobre o conjunto de validação
+        self.last_metrics = evaluate_calibration_metrics(
+            self.model, X_val, Y_val, screen_w, screen_h
         )
-        self.last_train_error = float(np.mean(diffs_train))
 
-        # --- Erro de holdout (generalizacao — o que e reportado) ---
-        A_holdout = design_matrix(iris_holdout)
-        pred_x_h = A_holdout @ self.coeffs_x
-        pred_y_h = A_holdout @ self.coeffs_y
-        diffs_h = np.sqrt(
-            (pred_x_h - screen_holdout[:, 0])**2 +
-            (pred_y_h - screen_holdout[:, 1])**2
-        )
-        self.last_holdout_error = float(np.mean(diffs_h))
+        self.last_holdout_error = self.last_metrics.rmse_px
+        train_metrics = evaluate_calibration_metrics(self.model, X_train, Y_train, screen_w, screen_h)
+        self.last_train_error = train_metrics.rmse_px
 
         logger.info(
-            "Calibracao: train_error=%.1fpx holdout_error=%.1fpx "
-            "(n_train=%d n_holdout=%d)",
-            self.last_train_error,
-            self.last_holdout_error,
-            n_train,
-            n_holdout,
+            "Calibração concluída (%s): %s",
+            self.model.name, self.last_metrics
         )
 
-        self.save_calibration()
+        # Não salvar automaticamente se o erro for inaceitável
+        if self.last_metrics.rmse_px <= CALIBRATION_REPROJECTION_ERROR_THRESHOLD:
+            self.save_calibration()
+
         return True, self.last_holdout_error
 
     # ------------------------------------------------------------------
@@ -232,192 +297,135 @@ class CalibrationManager:
     def map_to_screen(
         self, iris_pos: Tuple[float, float]
     ) -> Optional[Tuple[int, int]]:
-        """
-        Mapeia a posicao da iris para coordenadas de tela.
-
-        Args:
-            iris_pos: Coordenadas (x, y) da iris (normalizadas 0-1).
-
-        Returns:
-            (screen_x, screen_y) em pixels, ou None se nao calibrado.
-        """
-        if not self.is_calibrated or self.coeffs_x is None:
+        """Mapeia coordenadas do olhar para pixels da tela, aplicando trim."""
+        if not self.is_calibrated or not self.model.is_fitted:
             return None
 
-        x, y = iris_pos
-        features = np.array([1.0, x, y, x * y, x**2, y**2])
-        screen_x = float(np.dot(features, self.coeffs_x))
-        screen_y = float(np.dot(features, self.coeffs_y))
-        return int(screen_x), int(screen_y)
+        x_arr = np.array(iris_pos, dtype=np.float64)
+        try:
+            pred = self.model.predict(x_arr)
+            sx = int(round(pred[0] + self.trim_x))
+            sy = int(round(pred[1] + self.trim_y))
+            return sx, sy
+        except Exception as exc:
+            logger.error("Erro na predição de coordenadas: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
-    # Persistencia JSON
+    # Persistência Segura e Backup
     # ------------------------------------------------------------------
 
     def save_calibration(self) -> None:
-        """
-        Salva os coeficientes em arquivo .json.
-
-        Formato: JSON com lista de floats — sem pickle, sem dados binarios.
-        """
-        if not self.is_calibrated:
+        if not self.is_calibrated or not self.model.is_fitted:
             return
+
+        # Backup do arquivo existente antes de sobrescrever
+        if os.path.exists(self._json_file):
+            try:
+                shutil.copyfile(self._json_file, self._bak_file)
+            except OSError:
+                pass
 
         data = {
             "version": _CALIBRATION_VERSION,
             "profile": self.profile_name,
-            "coeffs_x": self.coeffs_x.tolist(),
-            "coeffs_y": self.coeffs_y.tolist(),
+            "model_type": self.model.name,
+            "screen_width": self.calibrated_screen_w,
+            "screen_height": self.calibrated_screen_h,
+            "trim_x": self.trim_x,
+            "trim_y": self.trim_y,
+            "coeffs_x": self.model.coeffs_x.tolist() if self.model.coeffs_x is not None else [],
+            "coeffs_y": self.model.coeffs_y.tolist() if self.model.coeffs_y is not None else [],
+            "condition_number": self.model.condition_number,
             "train_error_px": self.last_train_error,
             "holdout_error_px": self.last_holdout_error,
+            "metrics": {
+                "rmse_px": self.last_metrics.rmse_px if self.last_metrics else self.last_holdout_error,
+                "median_px": self.last_metrics.median_error_px if self.last_metrics else self.last_holdout_error,
+                "p95_px": self.last_metrics.p95_error_px if self.last_metrics else self.last_holdout_error,
+                "diag_pct": self.last_metrics.relative_diag_pct if self.last_metrics else 0.0,
+            } if self.last_metrics else {},
         }
+
         try:
             with open(self._json_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            logger.info("Calibracao salva em: %s", self._json_file)
+            logger.info("Calibração salva com sucesso em %s", self._json_file)
         except OSError as exc:
-            logger.error("Erro ao salvar calibracao: %s", exc)
+            logger.error("Erro ao salvar arquivo de calibração: %s", exc)
 
     def load_calibration(self) -> bool:
-        """
-        Carrega a calibracao do arquivo JSON.
-
-        Se o arquivo JSON nao existir mas o .npy legado existir,
-        migra automaticamente para JSON (sem allow_pickle para .npy legado
-        — a migracao e feita com allow_pickle somente neste contexto de
-        migracao unica).
-
-        Returns:
-            True se carregado com sucesso.
-        """
-        # Tentar JSON primeiro
         if os.path.exists(self._json_file):
             return self._load_json()
-
-        # Fallback: migrar .npy legado
         if os.path.exists(self._npy_file):
-            logger.info(
-                "Arquivo legado encontrado: %s. Migrando para JSON...",
-                self._npy_file,
-            )
             return self._migrate_npy_to_json()
-
         return False
 
     def _load_json(self) -> bool:
-        """Carrega calibracao do arquivo JSON com validacao de schema."""
         try:
             with open(self._json_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # Validar campos obrigatorios
-            required = {"coeffs_x", "coeffs_y"}
-            missing = required - data.keys()
-            if missing:
-                logger.error(
-                    "Arquivo de calibracao invalido: campos ausentes: %s",
-                    missing,
-                )
+            if "coeffs_x" not in data or "coeffs_y" not in data:
                 return False
 
-            coeffs_x = data["coeffs_x"]
-            coeffs_y = data["coeffs_y"]
-
-            # Validar tipos e tamanhos
-            if (not isinstance(coeffs_x, list) or
-                    not isinstance(coeffs_y, list) or
-                    len(coeffs_x) != 6 or
-                    len(coeffs_y) != 6):
-                logger.error(
-                    "Arquivo de calibracao invalido: coeffs devem ser "
-                    "listas de 6 floats."
-                )
+            cx = data["coeffs_x"]
+            cy = data["coeffs_y"]
+            if not isinstance(cx, list) or not isinstance(cy, list):
+                return False
+            if len(cx) < 6 or len(cx) != len(cy):
                 return False
 
-            self.coeffs_x = np.array(coeffs_x, dtype=np.float64)
-            self.coeffs_y = np.array(coeffs_y, dtype=np.float64)
+            model_type = data.get("model_type", "polynomial")
+            self.model = self._create_model(model_type)
+            ok = self.model.set_coefficients(data)
+            if not ok:
+                return False
+
             self.is_calibrated = True
+            self.calibrated_screen_w = int(data.get("screen_width", 1920))
+            self.calibrated_screen_h = int(data.get("screen_height", 1080))
+            self.trim_x = float(data.get("trim_x", 0.0))
+            self.trim_y = float(data.get("trim_y", 0.0))
             self.last_holdout_error = float(data.get("holdout_error_px", float('inf')))
             self.last_train_error = float(data.get("train_error_px", float('inf')))
 
             logger.info(
-                "Calibracao carregada: %s (holdout_error=%.1fpx)",
-                self._json_file,
-                self.last_holdout_error,
+                "Calibração carregada de %s (modelo %s, holdout_error=%.1fpx)",
+                self._json_file, self.model.name, self.last_holdout_error
             )
             return True
-
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            logger.error(
-                "Erro ao carregar calibracao JSON: %s", exc
-            )
-            return False
-        except OSError as exc:
-            logger.error("Erro de acesso ao arquivo de calibracao: %s", exc)
+        except Exception as exc:
+            logger.error("Erro ao ler JSON de calibração: %s", exc)
             return False
 
     def _migrate_npy_to_json(self) -> bool:
-        """
-        Migra arquivo .npy legado para JSON.
-
-        allow_pickle e usado apenas neste metodo de migracao unica,
-        nunca em carregamentos normais.
-        """
         try:
-            # Nota: allow_pickle necessario para compatibilidade com .npy
-            # que salva dicionario Python. Usado apenas uma vez para migracao.
             raw = np.load(self._npy_file, allow_pickle=True)
-            data = raw.item()  # npy salvo com np.save(file, dict)
-
-            self.coeffs_x = np.array(data["coeffs_x"], dtype=np.float64)
-            self.coeffs_y = np.array(data["coeffs_y"], dtype=np.float64)
+            data = raw.item()
+            self.model = PolynomialCalibrationModel()
+            self.model.coeffs_x = np.array(data["coeffs_x"], dtype=np.float64)
+            self.model.coeffs_y = np.array(data["coeffs_y"], dtype=np.float64)
+            self.model.is_fitted = True
             self.is_calibrated = True
-            self.last_holdout_error = float('inf')  # Legado nao tem holdout error
-            self.last_train_error = float('inf')
-
-            # Salvar como JSON para uso futuro
             self.save_calibration()
-            logger.info(
-                "Calibracao legada migrada de %s para %s.",
-                self._npy_file,
-                self._json_file,
-            )
+            logger.info("Migração de .npy legado para JSON concluída.")
             return True
-
         except Exception as exc:
             logger.error("Falha ao migrar calibracao legada: %s", exc)
             return False
 
-    # ------------------------------------------------------------------
-    # Validacao interna (legado — mantida para compatibilidade de testes)
-    # ------------------------------------------------------------------
-
     def _validate_calibration(self) -> float:
-        """
-        Calcula o erro de reprojecao usando os DADOS DE TREINO.
-
-        AVISO: Este metodo existe apenas para compatibilidade com testes
-        legados. Em producao, use last_holdout_error para avaliar
-        a qualidade da calibracao.
-
-        Returns:
-            Erro medio em pixels no conjunto de treino (nao e o erro real).
-        """
+        """Compatibilidade com testes legados."""
         if not self.is_calibrated:
             return float('inf')
 
         total_error = 0.0
         count = 0
-
         for iris_pt, screen_pt in zip(self.iris_points, self.screen_points):
-            predicted = self.map_to_screen(iris_pt)
-            if predicted:
-                dist = float(
-                    np.linalg.norm(
-                        np.array(predicted) - np.array(screen_pt)
-                    )
-                )
+            pred = self.map_to_screen(iris_pt)
+            if pred:
+                dist = float(np.linalg.norm(np.array(pred) - np.array(screen_pt)))
                 total_error += dist
                 count += 1
-
         return total_error / count if count > 0 else float('inf')

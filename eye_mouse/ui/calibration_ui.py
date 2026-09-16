@@ -99,8 +99,15 @@ class CalibrationUI:
             cx - 100, cy + 100, cx - 100, cy + 120, fill="green", outline=""
         )
 
-        # Handle window close (X button)
+        # Handle window close (X button) e teclas de atalho (Milestone 3)
         self.window.protocol("WM_DELETE_WINDOW", self.on_user_close)
+        self.window.bind("<Escape>", lambda e: self.on_user_close())
+        self.window.bind("<r>", lambda e: self.repeat_current_point())
+        self.window.bind("<R>", lambda e: self.repeat_current_point())
+        self.window.bind("<s>", lambda e: self.skip_current_point())
+        self.window.bind("<S>", lambda e: self.skip_current_point())
+
+        self._time_without_gaze: float = 0.0
 
         # Iniciar após breve delay
         self.window.after(1000, self.start_sequence)
@@ -244,16 +251,35 @@ class CalibrationUI:
         gaze_data = self.get_latest_gaze()
 
         if gaze_data is not None:
-            # Recuperar coordenadas da tela do ponto atual usando o índice capturado
             screen_x, screen_y = self.points[point_idx]
-
             self.calib_manager.add_point(gaze_data, (screen_x, screen_y))
-
             self.frames_collected += 1
             self.update_progress(self.frames_collected / self.max_frames)
+            self._time_without_gaze = 0.0
+        else:
+            self._time_without_gaze += 0.033
+            if self._time_without_gaze > 5.0:
+                self.canvas.itemconfig(
+                    self.instruction,
+                    text="Rosto não detectado! (Pressione 'S' para pular ou 'R' para repetir)"
+                )
 
         # Tentar novamente em breve (aprox 30 FPS = 33ms)
         self.window.after(33, lambda: self.collect_loop(point_idx))
+
+    def repeat_current_point(self):
+        """Repete o alvo de calibração atual."""
+        if self.is_collecting or self.current_point_idx < len(self.points):
+            self.is_collecting = False
+            self.frames_collected = 0
+            self.update_progress(0)
+            self.show_point()
+
+    def skip_current_point(self):
+        """Pula o alvo de calibração atual sem travar o usuário."""
+        self.is_collecting = False
+        self.current_point_idx += 1
+        self.show_point()
 
     def update_progress(self, percent):
         """Atualiza a barra de progresso visual."""
