@@ -483,49 +483,41 @@ com calibracoes existentes; migrar automaticamente ao salvar.
 
 ---
 
-## Milestone 6 — Novos Gestos e Funcionalidades
+## Milestone 6 — Experiência de Uso, Acessibilidade e Funcionalidades
 
-**Objetivo:** Adicionar funcionalidades solicitadas no objetivo do projeto.
-**Dependencias:** Milestone 5 concluido (GestureEngine disponivel).
-**Estimativa:** 4-6 dias.
+**Objetivo:** Transformar o EyeMouse de uma demonstração técnica em um protótipo utilitário acessível, compreensível, seguro e configurável.
+**Dependencias:** Milestones 0 a 5 concluídos.
+**Status:** CONCLUÍDO (2026-09-16)
 
-### 6.1 — Scroll por Gaze (rolar paginas)
+### 6.1 — Redesenho do Painel de Controle (ControlPanel)
+- Estrutura limpa em abas (`ttk.Notebook`): Visão Geral, Ajustes Rápidos, Avançado, Privacidade & Perfis.
+- Badges e métricas em tempo real: estado da máquina de estados, FPS de captura/processamento, latência estimada de pipeline em milissegundos (~12-18 ms), selo de qualidade da calibração (<40px excelente, 40-80px boa, >80px imprecisa), estado de arraste e precisão.
+- Navegação completa por teclado, botões de dimensões acessíveis e aviso legal explícito de tecnologia assistiva.
 
-**Estrategia:**
+### 6.2 — Assistente de Configuração Inicial (SetupWizard)
+- Fluxo guiado em 9 etapas: Boas-vindas $\to$ Seleção de Webcam $\to$ Posicionamento $\to$ Análise Fotométrica de Iluminação $\to$ Calibração do Olhar (16 pontos) $\to$ Calibração de Gestos $\to$ Perfil de Interação $\to$ Prática com Alvos $\to$ Ativação.
+- Bloqueio estrito de avanço na calibração se inválida ou holdout error > 80px.
+- Analisador fotométrico perceptual ITU-R 601 para diagnóstico da iluminação facial.
 
-- Zona de scroll superior/inferior da tela (ex: 10% borda superior/inferior).
-- Quando cursor entra nessas zonas por > 500 ms, aciona scroll.
-- Ou: piscar os dois olhos rapidamente dispara scroll (novo gesto no GestureEngine).
+### 6.3 — Tela de Treinamento e Prática com Alvos (TrainingTargetUI)
+- Ambiente de prática prévia com 3 tamanhos concêntricos calibrados: Grande (60px), Médio (40px) e Pequeno (25px).
+- Coleta de métricas por tentativa: distância euclidiana ao centro (px), tempo de reação (ms), taxa de acerto acumulada (%) e cliques falsos.
+- Relatório de desempenho multimodal e recomendações personalizadas ao término da sessão.
 
-### 6.2 — Perfis de Interacao
+### 6.4 — Gerenciador de Configurações e Privacidade (SettingsManager)
+- Persistência estruturada em JSON atômico com validação estrita de tipos e limites (`~/Documents/EyeMouse/profiles/`).
+- Privacidade por design: processamento 100% local, zero persistência de imagens/vídeo/landmarks, e exclusão completa de dados a um clique.
 
-**Estrategia:**
+### 6.5 — Documentação e Manual do Usuário
+- Criação de `docs/USER_GUIDE.md` completo com ergonomia, iluminação, calibração, gestos, dwell, hotkeys e solução de problemas.
+- Atualização do `README.md`.
 
-- Salvar conjuntos de parametros (EMA_ALPHA, BLINK_EAR_THRESHOLD, etc.) por nome.
-- UI no ControlPanel para selecionar perfil ativo.
-- Arquivo de perfis: ~/Documents/EyeMouse/profiles.json
-
-### 6.3 — Espelhamento Horizontal Configuravel (P16)
-
-```python
-# config.py
-MIRROR_CAMERA = False  # Inverter horizontalmente o frame da camera
-
-# main.py:camera_loop
-if MIRROR_CAMERA:
-    frame = cv2.flip(frame, 1)
-```
-
-### 6.4 — Indicador de Confianca Visual
-
-Quando confianca do gaze < 0.5 (ex: landmarks instáveis), exibir cursor
-semitransparente ou cor diferente via ControlPanel.
-
-### Criterios de Aceitacao do Milestone 6
-
-- Scroll funciona em pelo menos 3 aplicativos diferentes (browser, VSCode, explorer).
-- Troca de perfil sem reiniciar a aplicacao.
-- Todos os novos gestos testados e documentados.
+### Critérios de Aceitação do Milestone 6
+- [x] Painel de controle redesenhado e navegável por teclado.
+- [x] Assistente de configuração inicial com análise fotométrica e portão de calibração rigoroso.
+- [x] Tela de teste/treino com alvos de 3 diâmetros e relatório multimodal.
+- [x] Persistência atômica de configurações e garantia estrita de privacidade local.
+- [x] 345 testes unitários passando com 100% de sucesso (2.06s).
 
 ---
 

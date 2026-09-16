@@ -47,6 +47,9 @@ from dwell_clicker import DwellClicker
 from interaction_profiles import ProfileManager, InteractionProfileType
 from scroll_controller import ScrollController
 from ui.action_bar import ActionBar
+from settings_manager import SettingsManager
+from ui.setup_wizard import SetupWizardUI
+from ui.training_target_ui import TrainingTargetUI, TrainingSummary
 
 from config import (
     CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, TARGET_FPS,
@@ -123,6 +126,8 @@ class EyeMouseApp:
         self.running: bool = False
         self.calibration_ui = None
         self.control_panel = None
+        self.setup_wizard: Optional[SetupWizardUI] = None
+        self.training_ui: Optional[TrainingTargetUI] = None
 
         # Benchmark e Validador Temporal
         self.profiler = FrameProfiler()
@@ -156,8 +161,11 @@ class EyeMouseApp:
             on_release_all=self.mouse_controller.release_all if FT_SAFETY_RELEASE else None,
         )
 
-        # Módulos de Interação e Acessibilidade (Milestone 5)
-        self.profile_manager = ProfileManager(initial_profile=INTERACTION_PROFILE)
+        # Módulos de Interação e Acessibilidade (Milestone 5 & 6)
+        self.settings_manager = SettingsManager()
+        self.user_settings = self.settings_manager.load_profile(self.user_profile)
+        saved_profile = self.user_settings.get("interaction", {}).get("profile", INTERACTION_PROFILE)
+        self.profile_manager = ProfileManager(initial_profile=saved_profile)
         self.gesture_engine = GestureEngine(
             click_freeze_sec=CLICK_FREEZE_DURATION_SEC,
             bilateral_window_sec=BILATERAL_WINDOW_SEC,
@@ -407,7 +415,127 @@ class EyeMouseApp:
                 self.quit_app,
                 self.update_smoothing,
                 self.start_blink_calibration,
+                on_profile_change=self.on_profile_change_from_panel,
+                on_action_bar_toggle=self.on_action_bar_toggle,
+                on_open_wizard=self.open_setup_wizard,
+                on_open_training=self.open_training_screen,
+                on_clear_data=self.clear_user_data,
+                on_precision_toggle=self._on_precision_toggle,
             )
+
+    def on_profile_change_from_panel(self, profile_name: str) -> None:
+        """Callback acionado quando o usuário altera o perfil de interação no ControlPanel."""
+        try:
+            self.profile_manager.set_profile(profile_name)
+            self._apply_profile_config()
+            if "interaction" not in self.user_settings:
+                self.user_settings["interaction"] = {}
+            self.user_settings["interaction"]["profile"] = profile_name
+            self.settings_manager.save_profile(self.user_profile, self.user_settings)
+            logger.info("Perfil de interação alterado para '%s' e salvo.", profile_name)
+        except Exception as exc:
+            logger.warning("Falha ao trocar perfil para '%s': %s", profile_name, exc)
+
+    def on_action_bar_toggle(self, enabled: bool) -> None:
+        """Callback para habilitar ou desabilitar a barra de ações."""
+        if "accessibility" not in self.user_settings:
+            self.user_settings["accessibility"] = {}
+        self.user_settings["accessibility"]["enable_action_bar"] = enabled
+        self.settings_manager.save_profile(self.user_profile, self.user_settings)
+
+        if enabled:
+            self._show_action_bar_if_enabled()
+        else:
+            if self.action_bar:
+                self.action_bar.hide()
+
+    def open_setup_wizard(self) -> None:
+        """Abre o Assistente de Configuração Inicial (Setup Wizard)."""
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.withdraw()
+        if self.action_bar:
+            self.action_bar.hide()
+
+        self.setup_wizard = SetupWizardUI(
+            parent=self.root,
+            on_finish=self.on_wizard_finish,
+            on_cancel=self.on_wizard_cancel,
+            get_frame_fn=self.get_latest_frame,
+            on_start_calibration=self.start_calibration,
+        )
+
+    def on_wizard_finish(self, state_dict: Dict[str, Any]) -> None:
+        """Callback chamado ao concluir com sucesso o assistente de configuração."""
+        self.setup_wizard = None
+        logger.info("Setup Wizard concluído com sucesso.")
+
+        # Sincronizar perfil escolhido no wizard
+        profile_type = state_dict.get("interaction_profile", "hybrid")
+        self.on_profile_change_from_panel(profile_type)
+
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.deiconify()
+        else:
+            self.show_control_panel()
+        self._show_action_bar_if_enabled()
+
+    def on_wizard_cancel(self) -> None:
+        """Callback chamado quando o assistente é cancelado."""
+        self.setup_wizard = None
+        logger.info("Setup Wizard cancelado.")
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.deiconify()
+        else:
+            self.show_control_panel()
+        self._show_action_bar_if_enabled()
+
+    def open_training_screen(self) -> None:
+        """Abre a Tela de Treinamento com Alvos Interativos."""
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.withdraw()
+
+        self.training_ui = TrainingTargetUI(
+            parent=self.root,
+            on_complete=self.on_training_complete,
+            on_cancel=self.on_training_cancel,
+        )
+
+    def on_training_complete(self, summary: TrainingSummary) -> None:
+        """Callback acionado ao término da sessão de treinamento."""
+        self.training_ui = None
+        logger.info(
+            "Treinamento concluído. Acertos: %d/%d (%.1f%%)",
+            summary.targets_hit, summary.total_targets, summary.hit_rate_pct
+        )
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.deiconify()
+        else:
+            self.show_control_panel()
+
+    def on_training_cancel(self) -> None:
+        """Callback chamado se a tela de treinamento for cancelada."""
+        self.training_ui = None
+        if self.control_panel and hasattr(self.control_panel, "window"):
+            self.control_panel.window.deiconify()
+        else:
+            self.show_control_panel()
+
+    def clear_user_data(self) -> None:
+        """Limpa todas as calibrações e perfis salvos do usuário (garantia de privacidade)."""
+        confirm = messagebox.askyesno(
+            "Confirmar Exclusão de Dados",
+            "Tem certeza que deseja apagar todas as calibrações e perfis?\n\n"
+            "Nenhuma gravação de vídeo é armazenada, mas todos os arquivos de configuração "
+            "locais serão excluídos permanentemente.",
+        )
+        if confirm:
+            self.settings_manager.clear_all_user_data()
+            self.calibration_manager.clear_points()
+            messagebox.showinfo(
+                "Dados Excluídos",
+                "Todos os dados locais e calibrações foram removidos com sucesso."
+            )
+            logger.info("Todos os dados do usuário foram limpos a pedido do usuário.")
 
     def _hotkey_toggle_pause(self):
         currently_paused = self.state_machine.state == AppState.PAUSED
@@ -490,6 +618,18 @@ class EyeMouseApp:
             except Exception:
                 pass
 
+        if self.setup_wizard and hasattr(self.setup_wizard, "window"):
+            try:
+                self.setup_wizard.window.destroy()
+            except Exception:
+                pass
+
+        if self.training_ui and hasattr(self.training_ui, "window"):
+            try:
+                self.training_ui.window.destroy()
+            except Exception:
+                pass
+
         self.state_machine.try_transition(AppState.SHUTTING_DOWN)
 
         try:
@@ -524,8 +664,8 @@ class EyeMouseApp:
             updates = dict(self._ui_updates)
             self._ui_updates.clear()
 
-        if self.control_panel and updates:
-            fps = updates.get("fps", 0)
+        if self.control_panel:
+            fps = updates.get("fps", int(self.profiler.capture_fps))
             left_ear = updates.get("left_ear", 0.0)
             right_ear = updates.get("right_ear", 0.0)
             threshold = updates.get("threshold", 0.2)
@@ -538,6 +678,22 @@ class EyeMouseApp:
                 app_state = self.state_machine.state
                 if hasattr(self.control_panel, 'update_face_status'):
                     self.control_panel.update_face_status(face_det, app_state.name)
+
+            if hasattr(self.control_panel, "update_metrics"):
+                latency_ms = self.profiler.stats(FrameProfiler.STAGE_TOTAL).mean_ms
+                holdout_err = getattr(self.calibration_manager, "last_holdout_error", 0.0)
+                is_drag = getattr(self.mouse_controller, "is_dragging", False)
+                is_prec = getattr(self.mouse_controller, "is_precision_mode", False)
+                prof_name = getattr(self.profile_manager, "active_profile_name", "hybrid")
+                self.control_panel.update_metrics(
+                    fps=fps,
+                    process_fps=self.profiler.process_fps,
+                    holdout_error=holdout_err,
+                    latency_ms=latency_ms,
+                    is_dragging=is_drag,
+                    is_precision=is_prec,
+                    profile_name=prof_name,
+                )
 
         if self.running:
             self.root.after(100, self.update_ui_loop)
