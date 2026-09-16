@@ -171,6 +171,23 @@ LOG_FILE = os.path.join(USER_DATA_DIR, "eye_mouse.log")
 MODEL_FILE = "face_landmarker.task"
 
 # ---------------------------------------------------------------------------
+# Interação, Gestos e Acessibilidade (Milestone 5)
+# ---------------------------------------------------------------------------
+INTERACTION_PROFILE = "HYBRID"       # "CONTINUOUS", "DWELL", "HYBRID"
+DWELL_TIME_SEC = 0.900               # 900ms para disparar clique por fixação
+DWELL_RADIUS_PIXELS = 30.0           # Raio de dispersão máxima para fixação (px)
+DWELL_REARM_DISTANCE_PIXELS = 45.0   # Distância mínima após clique para permitir novo disparo (px)
+DWELL_REARM_TIMEOUT_SEC = 1.200      # Timeout máximo para rearmar dwell automaticamente (s)
+
+CLICK_FREEZE_DURATION_SEC = 0.150    # 150ms: congela cursor nas coordenadas pré-oclusão
+BILATERAL_WINDOW_SEC = 0.080         # 80ms: janela de coincidência bilateral para descarte
+
+# Modo Rolagem Dedicado (Milestone 5)
+SCROLL_TOP_ZONE_RATIO = 0.22         # Topo 22% da tela para rolar para cima
+SCROLL_BOTTOM_ZONE_RATIO = 0.78      # Base 22% da tela para rolar para baixo
+SCROLL_TICK_INTERVAL_SEC = 0.120     # Intervalo mínimo entre pulsos de scroll (120ms)
+
+# ---------------------------------------------------------------------------
 # Feature Flags — defina como False para reverter cada mudança individualmente
 # ---------------------------------------------------------------------------
 FT_NATIVE_MOUSE       = True   # M1.1: usar OsMouse (SendInput) em vez de pyautogui
@@ -184,6 +201,10 @@ FT_HOLDOUT_VALIDATION = True   # M3.2: validação com holdout separado
 FT_ONE_EURO_FILTER    = True   # M4.1: usar OneEuroFilter como padrão
 FT_DPI_AWARENESS      = True   # M4.4: declarar DPI awareness no Windows
 FT_VIRTUAL_DESKTOP    = True   # M4.4: suporte a desktop virtual multi-monitor
+FT_GESTURE_ENGINE     = True   # M5.2: motor central de gestos e arbitragem
+FT_DWELL_CLICK        = True   # M5.4: clique por permanência com proteção de rearmamento
+FT_ACTION_BAR         = True   # M5.5: barra flutuante de ações (Next-Action)
+FT_SCROLL_MODE        = True   # M5.7: modo dedicado de rolagem direcional
 
 # ---------------------------------------------------------------------------
 # Modo Benchmark

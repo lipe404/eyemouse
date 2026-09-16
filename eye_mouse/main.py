@@ -1,4 +1,4 @@
-﻿"""
+"""
 main.py — Ponto de entrada e orquestrador do EyeMouse.
 
 Otimizações do Milestone 2:
@@ -42,6 +42,11 @@ from benchmark import FrameProfiler
 from frame_data import FramePacket, TrackingResult
 from tracking_validator import TrackingValidator
 from camera_capture import CameraCapture
+from gesture_engine import GestureEngine, MouseAction
+from dwell_clicker import DwellClicker
+from interaction_profiles import ProfileManager, InteractionProfileType
+from scroll_controller import ScrollController
+from ui.action_bar import ActionBar
 
 from config import (
     CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, TARGET_FPS,
@@ -50,7 +55,12 @@ from config import (
     TRACKING_LOST_TIMEOUT_SEC, BENCHMARK_MODE,
     MAX_OBSERVATION_AGE_SEC, TRACKING_STABILIZATION_FRAMES,
     TRACKING_STABILIZATION_TIME_SEC, SHOW_PREVIEW, PREVIEW_FPS, DEBUG_DRAW,
-    FT_STATE_MACHINE, FT_SAFETY_RELEASE, FT_LATEST_FRAME_QUEUE, FT_TRACKING_VALIDATOR
+    INTERACTION_PROFILE, DWELL_TIME_SEC, DWELL_RADIUS_PIXELS,
+    DWELL_REARM_DISTANCE_PIXELS, DWELL_REARM_TIMEOUT_SEC,
+    CLICK_FREEZE_DURATION_SEC, BILATERAL_WINDOW_SEC,
+    SCROLL_TOP_ZONE_RATIO, SCROLL_BOTTOM_ZONE_RATIO, SCROLL_TICK_INTERVAL_SEC,
+    FT_STATE_MACHINE, FT_SAFETY_RELEASE, FT_LATEST_FRAME_QUEUE, FT_TRACKING_VALIDATOR,
+    FT_GESTURE_ENGINE, FT_DWELL_CLICK, FT_ACTION_BAR, FT_SCROLL_MODE
 )
 
 try:
@@ -146,6 +156,28 @@ class EyeMouseApp:
             on_release_all=self.mouse_controller.release_all if FT_SAFETY_RELEASE else None,
         )
 
+        # Módulos de Interação e Acessibilidade (Milestone 5)
+        self.profile_manager = ProfileManager(initial_profile=INTERACTION_PROFILE)
+        self.gesture_engine = GestureEngine(
+            click_freeze_sec=CLICK_FREEZE_DURATION_SEC,
+            bilateral_window_sec=BILATERAL_WINDOW_SEC,
+            enable_double_blink=self.profile_manager.active_config.enable_double_blink,
+        )
+        self.dwell_clicker = DwellClicker(
+            dwell_time_sec=DWELL_TIME_SEC,
+            dwell_radius_px=DWELL_RADIUS_PIXELS,
+            rearm_distance_px=DWELL_REARM_DISTANCE_PIXELS,
+            rearm_timeout_sec=DWELL_REARM_TIMEOUT_SEC,
+        )
+        self.scroll_controller = ScrollController(
+            screen_h=self.mouse_controller.screen_h,
+            top_zone_ratio=SCROLL_TOP_ZONE_RATIO,
+            bottom_zone_ratio=SCROLL_BOTTOM_ZONE_RATIO,
+            min_tick_interval_sec=SCROLL_TICK_INTERVAL_SEC,
+        )
+        self.action_bar: Optional[ActionBar] = None
+        self._apply_profile_config()
+
         # Câmera e Captura (com suporte ao CameraCapture otimizado e fallback defensivo)
         self.camera_capture: Optional[CameraCapture] = None
         self.cap = None
@@ -210,8 +242,83 @@ class EyeMouseApp:
         self.root.after(100, self.update_ui_loop)
 
     # ------------------------------------------------------------------
-    # Calibração
+    # Calibração e Perfis de Interação
     # ------------------------------------------------------------------
+
+    def _apply_profile_config(self) -> None:
+        """Sincroniza o perfil ativo com o GestureEngine e o DwellClicker."""
+        cfg = self.profile_manager.active_config
+        self.gesture_engine.set_gesture_enabled("left_blink", cfg.enable_left_blink)
+        self.gesture_engine.set_gesture_enabled("right_blink", cfg.enable_right_blink)
+        self.gesture_engine.set_gesture_enabled("double_blink", cfg.enable_double_blink)
+        self.gesture_engine.set_gesture_enabled("hold_start", cfg.enable_hold_drag)
+        self.gesture_engine.set_gesture_enabled("hold_end", cfg.enable_hold_drag)
+        self.gesture_engine.set_gesture_enabled("dwell", cfg.enable_dwell_click)
+        if not cfg.enable_dwell_click:
+            self.dwell_clicker.reset()
+
+    def _show_action_bar_if_enabled(self) -> None:
+        """Inicializa ou exibe a barra de ações se permitida pelo perfil e flags."""
+        if FT_ACTION_BAR and self.profile_manager.active_config.enable_action_bar:
+            if self.action_bar is None:
+                try:
+                    self.action_bar = ActionBar(
+                        root=self.root,
+                        on_action_selected=self._on_action_bar_selected,
+                        on_pause_toggle=self.toggle_pause,
+                        on_scroll_toggle=self._on_scroll_toggle,
+                        on_precision_toggle=self._on_precision_toggle,
+                        on_drag_toggle=self._on_drag_toggle,
+                    )
+                except Exception as exc:
+                    logger.warning("Falha ao inicializar ActionBar (%s).", exc)
+            elif self.action_bar:
+                self.action_bar.show()
+
+    def _on_action_bar_selected(self, action: MouseAction) -> None:
+        logger.info("Ação selecionada na barra: %s", action.name)
+
+    def _on_scroll_toggle(self, is_scrolling: bool) -> None:
+        if is_scrolling:
+            self.scroll_controller.activate()
+        else:
+            self.scroll_controller.deactivate()
+
+    def _on_precision_toggle(self, is_precision: bool) -> None:
+        self.mouse_controller.set_precision_mode(is_precision)
+
+    def _on_drag_toggle(self, is_dragging: bool) -> None:
+        if is_dragging:
+            self.mouse_controller.start_drag()
+        else:
+            self.mouse_controller.stop_drag()
+
+    def _execute_mouse_action(self, action: MouseAction) -> None:
+        """Executa a ação de mouse especificada de forma centralizada e segura."""
+        if action == MouseAction.LEFT_CLICK:
+            self.mouse_controller.left_click()
+        elif action == MouseAction.RIGHT_CLICK:
+            self.mouse_controller.right_click()
+        elif action == MouseAction.DOUBLE_CLICK:
+            self.mouse_controller.double_click()
+        elif action == MouseAction.START_DRAG:
+            self.mouse_controller.start_drag()
+            if self.action_bar:
+                self.action_bar.set_dragging(True)
+        elif action == MouseAction.STOP_DRAG:
+            self.mouse_controller.stop_drag()
+            if self.action_bar:
+                self.action_bar.set_dragging(False)
+        elif action == MouseAction.TOGGLE_PRECISION:
+            new_mode = self.mouse_controller.toggle_precision_mode()
+            if self.action_bar:
+                self.action_bar.set_precision(new_mode)
+        elif action == MouseAction.SCROLL_UP:
+            self.mouse_controller.scroll(120)
+        elif action == MouseAction.SCROLL_DOWN:
+            self.mouse_controller.scroll(-120)
+        elif action == MouseAction.PAUSE:
+            self.toggle_pause(not self.is_paused)
 
     def _enter_active_after_calibration_load(self):
         try:
@@ -220,6 +327,7 @@ class EyeMouseApp:
         except InvalidTransition:
             pass
         self.show_control_panel()
+        self._show_action_bar_if_enabled()
 
     def start_calibration(self):
         logger.info("Iniciando calibração...")
@@ -228,6 +336,8 @@ class EyeMouseApp:
 
         if self.control_panel:
             self.control_panel.window.withdraw()
+        if self.action_bar:
+            self.action_bar.hide()
 
         self.calibration_ui = CalibrationUI(
             self.root,
@@ -253,6 +363,7 @@ class EyeMouseApp:
                 self.control_panel.window.deiconify()
             else:
                 self.show_control_panel()
+            self._show_action_bar_if_enabled()
             return
 
         success, error = self.calibration_manager.compute_calibration()
@@ -285,6 +396,7 @@ class EyeMouseApp:
             self.control_panel.window.deiconify()
         else:
             self.show_control_panel()
+        self._show_action_bar_if_enabled()
 
     def show_control_panel(self):
         if not self.control_panel:
@@ -311,12 +423,20 @@ class EyeMouseApp:
             success = self.state_machine.try_transition(AppState.PAUSED)
             if success:
                 logger.info("Aplicação pausada.")
+                self.dwell_clicker.reset()
+                self.scroll_controller.deactivate()
+                if self.action_bar:
+                    self.action_bar.set_paused(True)
+                    self.action_bar.set_scrolling(False)
         else:
             success = self.state_machine.try_transition(AppState.ACTIVE)
             if success:
                 logger.info("Aplicação retomada.")
                 self.mouse_controller.reset_smoothing()
                 self.validator.reset()
+                self.dwell_clicker.reset()
+                if self.action_bar:
+                    self.action_bar.set_paused(False)
 
     @property
     def is_paused(self) -> bool:
@@ -363,6 +483,12 @@ class EyeMouseApp:
 
         if FT_SAFETY_RELEASE:
             self.mouse_controller.release_all()
+
+        if self.action_bar:
+            try:
+                self.action_bar.destroy()
+            except Exception:
+                pass
 
         self.state_machine.try_transition(AppState.SHUTTING_DOWN)
 
@@ -539,12 +665,18 @@ class EyeMouseApp:
                 if (FT_STATE_MACHINE and self.state_machine.state == AppState.TRACKING_LOST):
                     self.state_machine.try_transition(AppState.ACTIVE)
                     self.mouse_controller.reset_smoothing()
+                    self.dwell_clicker.reset()
             else:
                 time_since_face = current_time - self.last_face_time
                 if (FT_STATE_MACHINE and
                         self.state_machine.state == AppState.ACTIVE and
                         time_since_face > TRACKING_LOST_TIMEOUT_SEC):
                     self.state_machine.try_transition(AppState.TRACKING_LOST)
+                    self.dwell_clicker.reset()
+                    if self.mouse_controller.is_dragging:
+                        self.mouse_controller.stop_drag()
+                        if self.action_bar:
+                            self.action_bar.set_dragging(False)
 
             # 5. Controle do mouse — apenas se rastreamento for válido, NÃO expirado e estabilizado
             if face_detected:
@@ -569,9 +701,40 @@ class EyeMouseApp:
 
                     if screen_pos and not self.blink_detector.is_calibrating:
                         sx, sy = screen_pos
+
+                        # M5.2: Click Freeze e buffer de coordenadas pré-oclusão
+                        if FT_GESTURE_ENGINE:
+                            self.gesture_engine.record_stable_position(sx, sy, timestamp=current_time)
+                            sx, sy = self.gesture_engine.get_stabilized_position((sx, sy), timestamp=current_time)
+
+                        # M5.7: Modo Rolagem Dedicado
+                        if FT_SCROLL_MODE and self.scroll_controller.is_active:
+                            scroll_delta = self.scroll_controller.update(sy, timestamp=current_time)
+                            if scroll_delta and not BENCHMARK_MODE:
+                                self.mouse_controller.scroll(scroll_delta)
+
+                        # Movimento do cursor
                         with self.profiler.measure(FrameProfiler.STAGE_MOUSE):
                             if not BENCHMARK_MODE:
-                                self.mouse_controller.move(sx, sy)
+                                self.mouse_controller.move(sx, sy, timestamp=current_time)
+
+                        # M5.4: Dwell Click (clique por fixação com proteção anti-loop)
+                        if FT_DWELL_CLICK and self.profile_manager.active_config.enable_dwell_click:
+                            dwell_trig, dwell_prog, dwell_coord = self.dwell_clicker.update(
+                                sx, sy, timestamp=current_time
+                            )
+                            self._post_ui_update("dwell_progress", dwell_prog)
+
+                            if dwell_trig and not BENCHMARK_MODE:
+                                consumed = False
+                                if self.action_bar and self.action_bar.is_visible():
+                                    consumed = self.action_bar.handle_dwell_click(int(sx), int(sy))
+
+                                if not consumed:
+                                    action = MouseAction.LEFT_CLICK
+                                    if self.action_bar:
+                                        action = self.action_bar.consume_armed_action()
+                                    self._execute_mouse_action(action)
 
                     # Detecção e injeção de piscadas/gestos
                     img_h, img_w = packet.image.shape[:2]
@@ -579,17 +742,37 @@ class EyeMouseApp:
                         self.blink_detector.process(landmarks, img_w, img_h)
                     )
 
-                    if not BENCHMARK_MODE:
-                        if l_blink:
-                            self.mouse_controller.left_click()
-                        if r_blink:
-                            self.mouse_controller.right_click()
-                        if d_blink:
-                            self.mouse_controller.double_click()
-                        if hold_start:
-                            self.mouse_controller.start_drag()
-                        if hold_end:
-                            self.mouse_controller.stop_drag()
+                    if FT_GESTURE_ENGINE:
+                        cfg = self.profile_manager.active_config
+                        eff_l = l_blink if cfg.enable_left_blink else False
+                        eff_r = r_blink if cfg.enable_right_blink else False
+                        eff_d = d_blink if cfg.enable_double_blink else False
+                        eff_hs = hold_start if cfg.enable_hold_drag else False
+                        eff_he = hold_end if cfg.enable_hold_drag else False
+
+                        action = self.gesture_engine.process_blink_events(
+                            eff_l, eff_r, eff_d, eff_hs, eff_he, timestamp=current_time
+                        )
+
+                        if action and not BENCHMARK_MODE:
+                            if action in (MouseAction.LEFT_CLICK, MouseAction.RIGHT_CLICK, MouseAction.DOUBLE_CLICK):
+                                if self.action_bar:
+                                    armed = self.action_bar.consume_armed_action()
+                                    if armed != MouseAction.LEFT_CLICK:
+                                        action = armed
+                            self._execute_mouse_action(action)
+                    else:
+                        if not BENCHMARK_MODE:
+                            if l_blink:
+                                self.mouse_controller.left_click()
+                            if r_blink:
+                                self.mouse_controller.right_click()
+                            if d_blink:
+                                self.mouse_controller.double_click()
+                            if hold_start:
+                                self.mouse_controller.start_drag()
+                            if hold_end:
+                                self.mouse_controller.stop_drag()
                 else:
                     ears = (0.0, 0.0)
 

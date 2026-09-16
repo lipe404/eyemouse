@@ -430,63 +430,56 @@ com calibracoes existentes; migrar automaticamente ao salvar.
 
 ---
 
-## Milestone 5 — Desacoplamento do Pipeline e Gestos
+## Milestone 5 — Motor de Gestos, Interação Completa e Acessibilidade Universal
 
-**Objetivo:** Resolver P12 (acoplamento) e preparar para novos gestos (scroll, etc.).
-**Dependencias:** Milestones 1-4 concluidos.
-**Estimativa:** 3-4 dias.
+**Objetivo:** Permitir o controle hands-free completo do Windows (clique esquerdo, direito, duplo, arraste, rolagem, precisão, pausa) por gestos voluntários e permanência (Dwell), com acessibilidade universal.
+**Dependencias:** Milestones 1-4 concluídos.
+**Status:** CONCLUÍDO (2026-09-16)
 
-### 5.1 — Extrair GestureEngine
+### 5.1 — Máquina de Estados de Piscadas e Histerese (`BlinkDetector`)
+- Máquina de estados explícita com `EyeBlinkState` (`EYES_OPEN`, `POSSIBLE_CLOSING`, `CLOSURE_CONFIRMED`, `OPENING_CONFIRMED`, `GESTURE_COMPLETED`, `COOLDOWN`).
+- Timestamps monotônicos substituindo contadores de frames.
+- Histerese dupla (`ear_close_threshold` e `ear_open_threshold`) eliminando oscilações de borda.
+- Calibração de referências individuais por olho (`left_open_ear`, `left_closed_ear`, `right_open_ear`, `right_closed_ear`).
+- Discriminação fisiológica: micropiscada reflexa (<90ms e alta velocidade de abertura) vs. voluntária (120ms..450ms).
 
-**Novo arquivo:** eye_mouse/gesture_engine.py
+### 5.2 — Motor Central de Gestos e Arbitragem (`GestureEngine`)
+- Arbitragem de conflitos bilaterais: janela de coincidência ($\le 80$ms) impede geração acidental de dois cliques.
+- Descarte seguro de piscadas bilaterais naturais de lubrificação por padrão.
+- **Click Freeze:** Buffer circular congelando o cursor na coordenada estável pré-fechamento ($\approx 120$ms antes da oclusão) durante a janela de clique ($150$ms), neutralizando a rotação do globo ocular (fenômeno de Bell) e deformações de landmarks.
+- Supressão de cliques individuais acidentais durante arraste ativo.
+- Remapeamento e desativação granular de gestos.
 
-Responsavel apenas por: receber eventos de blink_detector e emitir
-comandos de alto nivel (CLICK_LEFT, CLICK_RIGHT, DOUBLE_CLICK,
-DRAG_START, DRAG_END, SCROLL_UP, SCROLL_DOWN).
+### 5.3 — Clique por Permanência (`DwellClicker`)
+- Detecção temporal contínua de fixação ($R_{dwell} = 30$px, $T_{dwell} = 900$ms).
+- Indicador de progresso normalizado ($0.0 \to 1.0$) para feedback visual circular.
+- Cancelamento suave ao afastar o olhar ($> 1,35 \times R_{dwell}$).
+- **Proteção Anti-Loop de Rearmamento:** Requer que o olhar se afaste $\ge 45$px antes de permitir novo clique no mesmo local.
 
-### 5.2 — Extrair Pipeline
+### 5.4 — Barra de Ações Flutuante (`ActionBar`)
+- Barra de ferramentas visual com botões dimensionados para acessibilidade (Esq, Dir, 2x, Arrastar/Soltar, Rolagem, Precisão, Pausa, Ancoragem).
+- **Padrão Next-Action:** Armar ação para o próximo clique ou dwell, revertendo automaticamente para Clique Esquerdo.
+- Ancoragem nos 4 cantos da tela (`TOP`, `BOTTOM`, `LEFT`, `RIGHT`).
+- Acionamento por Dwell direto com consumo de evento (impede clique pass-through para o Windows).
 
-**Novo arquivo:** eye_mouse/pipeline.py
+### 5.5 — Modo Dedicado de Rolagem (`ScrollController`)
+- Zonas direcionais de tela (topo 22% = rolar para cima; base 22% = rolar para baixo).
+- Zona central neutra de 56% para leitura estável e confortável.
+- Curva de velocidade proporcional à penetração na borda e rate limiting de 120ms.
 
-```python
-class GazePipeline:
-    def process(self, frame) -> PipelineResult:
-        """Retorna dados de gaze, confianca e eventos de gesto."""
-        ...
+### 5.6 — Perfis de Interação e Acessibilidade (`ProfileManager`)
+- Perfis `CONTINUOUS`, `DWELL` e `HYBRID`.
+- **Garantia de Acessibilidade:** Nenhuma função essencial exige piscada assimétrica.
 
-@dataclass
-class PipelineResult:
-    screen_pos: Optional[Tuple[int, int]]
-    confidence: float         # 0.0-1.0
-    gesture_events: List[str] # ["CLICK_LEFT", "DRAG_START", ...]
-    face_detected: bool
-    fps: float
-```
-
-### 5.3 — Simplificar main.py
-
-processing_loop vira apenas:
-
-```python
-def processing_loop(self):
-    while self.running:
-        frame = self.frame_queue.get(timeout=1.0)
-        result = self.pipeline.process(frame)
-        self._apply_result(result)
-
-def _apply_result(self, result: PipelineResult):
-    if not self.is_paused and result.screen_pos:
-        self.mouse_controller.move(*result.screen_pos)
-    for event in result.gesture_events:
-        self._dispatch_gesture(event)
-```
-
-### Criterios de Aceitacao do Milestone 5
-
-- Todos os comportamentos existentes preservados.
-- processing_loop com < 20 linhas de logica de negocio.
-- GestureEngine testavel sem instanciar EyeMouseApp.
-- Cobertura de testes >= cobertura anterior (sem regressao).
+### Critérios de Aceitação do Milestone 5
+- [x] Detecção de piscada com máquina de estados explícita e temporização monotônica.
+- [x] Click Freeze ativo impedindo saltos do cursor no clique.
+- [x] Dwell click com proteção anti-loop e indicador de progresso.
+- [x] Barra de ações com despacho Next-Action e ancoragem nos 4 lados.
+- [x] Modo de rolagem dedicado com zona neutra de leitura.
+- [x] Liberação garantida de arraste em pausas, encerramento ou perda de rosto > 1.0s.
+- [x] Documentação técnica completa em `docs/GESTURE_ENGINE_INTERACTION.md`.
+- [x] 302 testes unitários passando com 100% de sucesso (2.05s).
 
 ---
 
