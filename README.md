@@ -1,78 +1,142 @@
-# EyeMouse - Controle de Mouse por Rastreamento Ocular
+﻿# EyeMouse
 
-O EyeMouse é uma aplicação de tecnologia assistiva desenvolvida em Python que permite controlar o cursor do mouse utilizando apenas o movimento dos olhos e executar cliques através de piscadas. O sistema utiliza visão computacional e aprendizado de máquina para mapear a posição da íris na tela em tempo real.
+Controle o mouse do Windows usando apenas seus olhos e uma webcam convencional.
 
-## Funcionalidades Principais
+## Requisitos de Sistema
 
-*   **Rastreamento Ocular em Tempo Real**: Utiliza a webcam para detectar e seguir o movimento da íris com alta precisão.
-*   **Calibração Personalizada**: Sistema de calibração de 9 pontos para mapear as características únicas do olhar de cada usuário para as coordenadas da tela.
-*   **Cliques por Piscada**: Detecção de piscadas voluntárias para executar cliques esquerdo, direito e duplo clique.
-*   **Modo Arrastar**: Funcionalidade de "segurar e arrastar" ativada ao fechar o olho por um período prolongado.
-*   **Suavização de Movimento**: Algoritmos de filtro para garantir um movimento de cursor fluido e reduzir tremores naturais.
-*   **Painel de Controle**: Interface flutuante para ajustes de sensibilidade, recalibração e monitoramento do estado do sistema.
+- **Windows** 10 ou superior (64-bit)
+- **Python 3.11** (recomendado) ou **3.12**  
+  ⚠️ Python 3.13+ **não é suportado** — o MediaPipe não possui wheels oficiais para Python 3.13 no Windows.
+- Webcam USB convencional (30+ FPS recomendado)
+- CPU razoavelmente recente (a inferência do MediaPipe roda em CPU)
 
-## Gestos e Comandos
+## Instalação
 
-O sistema utiliza os seguintes padrões de piscada para interagir com o computador:
+```bash
+# 1. Clone o repositório
+git clone https://github.com/lipe404/eyemouse.git
+cd eyemouse
 
-| Gesto | Ação | Descrição |
-|---|---|---|
-| **Piscar Olho Esquerdo** | Clique Esquerdo | Uma piscada rápida e intencional com o olho esquerdo. |
-| **Piscar Olho Direito** | Clique Direito | Uma piscada rápida e intencional com o olho direito. |
-| **Piscar Ambos** | Duplo Clique | Piscar ambos os olhos simultaneamente de forma rápida. |
-| **Fechar Olho Esq. (1.5s)** | Segurar / Arrastar | Manter o olho esquerdo fechado por 1,5 segundos ativa o modo "arrastar". Fechar novamente solta o botão. |
+# 2. Crie e ative um ambiente virtual com Python 3.11
+py -3.11 -m venv .venv
+.venv\Scripts\activate
 
-**Nota**: O sistema diferencia piscadas naturais (involuntárias) de piscadas de comando baseando-se na duração e intensidade do fechamento da pálpebra.
+# 3. Instale as dependências
+pip install -r eye_mouse/requirements.txt
+```
 
-## Como Funciona
+## Uso
 
-### Rastreamento e Calibração
-O software utiliza o MediaPipe Face Mesh para identificar 468 pontos de referência facial. A partir desses pontos, isola-se a região dos olhos e calcula-se o centro da íris.
-Durante a calibração, o sistema coleta amostras da posição da íris enquanto o usuário olha para pontos fixos na tela. Um modelo de regressão polinomial é então treinado para correlacionar a geometria do olho com as coordenadas `(x, y)` do monitor.
+```bash
+python eye_mouse/main.py
+```
 
-### Detecção de Piscadas (EAR)
-A detecção de cliques baseia-se no cálculo do EAR (Eye Aspect Ratio), uma medida matemática da abertura do olho. Quando o EAR cai abaixo de um limiar definido (configurável), o sistema registra um fechamento. Filtros temporais são aplicados para distinguir piscadas reais de ruídos ou piscadas reflexas muito rápidas.
+1. Digite um nome de perfil (ou Enter para "default")
+2. Siga o processo de calibração de **16 pontos** (grade 4×4)
+3. Use o painel de controle flutuante para pausar, recalibrar ou sair
 
-## Stack Tecnológico e Dependências
+**Atalho global:** `Ctrl+Shift+P` — pausa/retoma o controle
 
-O projeto foi desenvolvido inteiramente em **Python 3.10+** utilizando as seguintes bibliotecas:
+## Gestos
 
-*   **MediaPipe**: Framework do Google para processamento de mídia e detecção de landmarks faciais de alta performance via CPU.
-*   **OpenCV (cv2)**: Captura de vídeo da webcam e pré-processamento de imagem.
-*   **NumPy**: Computação numérica para cálculos vetoriais, médias ponderadas e modelos de regressão para calibração.
-*   **PyAutoGUI**: Automação de interface para controle programático do cursor e eventos de clique do sistema operacional.
-*   **Tkinter**: Interface gráfica nativa do Python utilizada para a tela de calibração fullscreen e o painel de controle.
+| Gesto | Ação |
+|---|---|
+| Piscar olho esquerdo | Clique esquerdo |
+| Piscar olho direito | Clique direito |
+| Piscar os dois | Duplo clique |
+| Manter olho fechado (~1,5s) | Iniciar arraste |
+| Abrir olho após arraste | Soltar arraste |
 
-## Instalação e Execução
+## Calibração
 
-1.  Certifique-se de ter o Python 3.10 ou superior instalado.
-2.  Instale as dependências listadas:
-    ```bash
-    pip install -r eye_mouse/requirements.txt
-    ```
-3.  Execute o arquivo principal dentro do diretório do projeto:
-    ```bash
-    cd eye_mouse
-    python main.py
-    ```
+O sistema usa **16 pontos** de calibração (grade 4×4). Um subconjunto holdout (≥ 20% dos pontos) é separado antes do treinamento para medir o erro de generalização real. O erro reportado é o **holdout error** — não o resíduo de treinamento.
 
-## Configuração
+Se o erro for maior que 80 px, o sistema oferece opção de recalibrar.
 
-O arquivo `config.py` permite ajustar parâmetros avançados para adaptar o sistema ao seu ambiente e preferências:
+## Arquitetura
 
-*   **CAMERA_INDEX**: Índice da webcam a ser utilizada.
-*   **EMA_ALPHA**: Fator de suavização do cursor (valores menores = mais suave, porém com maior latência).
-*   **BLINK_EAR_THRESHOLD**: Sensibilidade da detecção de piscada (ajuste se os cliques não estiverem sendo registrados ou ocorrendo involuntariamente).
+```
+Câmera → frame_queue → GazeTracker (MediaPipe)
+                              ↓
+                       CalibrationManager (mapeamento polinomial 2ª ordem)
+                              ↓
+                       SmoothingFilter (Kalman + deadzone)
+                              ↓
+                       StateMachine (ACTIVE/PAUSED/TRACKING_LOST/...)
+                              ↓
+                       MouseController → OsMouse (SendInput nativo)
+```
 
-## Gerando Executável (.exe)
+**Sem latência artificial:** o driver usa a API Win32 `SendInput` diretamente, eliminando os 100 ms por chamada do `pyautogui.PAUSE` padrão.
 
-Para criar um arquivo executável único para distribuir a amigos ou rodar sem Python instalado:
+## Estrutura do Projeto
 
-1.  Certifique-se de ter instalado as dependências (`pip install -r eye_mouse/requirements.txt`).
-2.  Execute o script de build na raiz do projeto:
-    ```bash
-    python build_exe.py
-    ```
-3.  O arquivo `EyeMouse.exe` será gerado na pasta `dist/`.
-    *   Este arquivo contém tudo o que é necessário para rodar.
-    *   **Nota**: Na primeira execução, o Windows Defender pode exibir um aviso por ser um software não assinado. Clique em "Mais informações" > "Executar mesmo assim".
+```
+eye_mouse/
+├── main.py               — Orquestrador principal
+├── app_state.py          — Máquina de estados (NOVO)
+├── benchmark.py          — Sistema de métricas (NOVO)
+├── os_mouse.py           — Driver SendInput nativo (NOVO)
+├── gaze_tracker.py       — Inferência MediaPipe
+├── blink_detector.py     — Detecção de piscada (EAR)
+├── calibration.py        — Regressão polinomial + persistência JSON
+├── mouse_controller.py   — Controle de alto nível
+├── config.py             — Configurações e feature flags
+├── utils/smoothing.py    — Filtro de Kalman adaptativo
+└── ui/
+    ├── calibration_ui.py — UI de calibração (fullscreen)
+    └── control_panel.py  — Painel flutuante
+docs/
+├── AUDIT.md              — Auditoria técnica completa
+└── ROADMAP.md            — Plano de implementação em milestones
+tests/                    — Testes unitários (pytest)
+```
+
+## Executar Testes
+
+```bash
+pytest tests/ -v
+```
+
+> Os testes não movem o cursor real, não abrem janelas e não requerem câmera.
+
+## Modo Benchmark
+
+Para medir latência de software sem mover o cursor:
+
+```python
+# eye_mouse/config.py
+BENCHMARK_MODE = True
+```
+
+Execute normalmente. O pipeline roda completo mas nenhum evento de mouse é enviado ao SO. O relatório de métricas é salvo no log ao encerrar.
+
+## Persistência
+
+As calibrações são salvas em `~/Documents/EyeMouse/calibration_<perfil>.json`.
+
+- Formato JSON (sem pickle, sem execução de código arbitrário)
+- Migração automática de arquivos `.npy` legados
+- Versionado (`"version": 2`)
+
+## Feature Flags
+
+Em `config.py`, você pode reverter mudanças individuais:
+
+```python
+FT_NATIVE_MOUSE     = True   # OsMouse vs pyautogui
+FT_SAFETY_RELEASE   = True   # release_all() em pausas/erros
+FT_STATE_MACHINE    = True   # Máquina de estados AppState
+FT_JSON_CALIBRATION = True   # Persistência JSON
+BENCHMARK_MODE      = False  # Modo benchmark (não move cursor)
+```
+
+## Limitações Conhecidas
+
+- Precisão de um eye tracker dedicado não é garantida com webcam convencional
+- Requer Python ≤ 3.12 (limitação do MediaPipe)
+- `winsound` (beeps de feedback) é exclusivo do Windows
+
+## Licença
+
+MIT

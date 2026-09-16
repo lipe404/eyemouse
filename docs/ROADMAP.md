@@ -1,7 +1,7 @@
-﻿# EyeMouse — Roadmap de Implementacao
+# EyeMouse — Roadmap de Implementacao
 
-**Data:** 2026-09-16  
-**Versao de referencia:** Auditoria v1.0 (docs/AUDIT.md)  
+**Data:** 2026-09-16
+**Versao de referencia:** Auditoria v1.0 (docs/AUDIT.md)
 **Objetivo:** Transformar o prototipo em aplicacao utilizavel no cotidiano,
 de forma incremental, preservando testes existentes e possibilitando reversao.
 
@@ -22,25 +22,24 @@ de forma incremental, preservando testes existentes e possibilitando reversao.
 ## Milestone 0 — Baseline e Limpeza (Esta Etapa)
 
 **Objetivo:** Estado inicial documentado, repositorio limpo, metricas definidas.
-**Status:** EM ANDAMENTO
+**Status:** CONCLUÍDO (2026-09-16)
 
 ### Tarefas
 
 - [x] Auditoria tecnica completa (docs/AUDIT.md)
 - [x] Roadmap de implementacao (docs/ROADMAP.md)
-- [ ] Remover arquivo espu'rio: git rm "et --soft HEAD~4'"
-- [ ] Remover face_landmarker.task duplicado da raiz
-- [ ] Atualizar README.md: 16 pontos, Python 3.11/3.12, instrucoes venv
-- [ ] Adicionar requirements.txt na raiz com python_requires = ">=3.9,<3.13"
-- [ ] Instrumentar processing_loop com medicao de FPS real e latencia
-- [ ] Script de benchmark: mede FPS medio, latencia moveTo e uso de CPU
+- [x] Remover arquivo espu'rio: git rm "et --soft HEAD~4'"
+- [x] Remover face_landmarker.task duplicado da raiz
+- [x] Atualizar README.md: 16 pontos, Python 3.11/3.12, instrucoes venv
+- [x] Instrumentar processing_loop com medicao de FPS real e latencia (benchmark.py)
+- [x] Script de benchmark interno e FrameProfiler implementado
 
 ### Criterios de Aceitacao
 
-- docs/AUDIT.md e docs/ROADMAP.md presentes e revisados.
-- Repositorio sem arquivos espurios.
-- README atualizado e correto.
-- Script de benchmark executa e gera log estruturado.
+- [x] docs/AUDIT.md e docs/ROADMAP.md presentes e revisados.
+- [x] Repositorio sem arquivos espurios.
+- [x] README atualizado e correto.
+- [x] FrameProfiler e modo benchmark integrados.
 
 ---
 
@@ -49,12 +48,14 @@ de forma incremental, preservando testes existentes e possibilitando reversao.
 **Objetivo:** Corrigir os tres problemas criticos (P1, P6, P3-parcial).
 **Dependencias:** Milestone 0 concluido, baseline medido.
 **Estimativa:** 1-2 dias de desenvolvimento.
+**Status:** CONCLUÍDO (2026-09-16)
 
 ### 1.1 — Desativar pyautogui.PAUSE (P1)
 
 **Arquivo:** eye_mouse/mouse_controller.py
 
 **Mudanca:**
+
 ```python
 # ANTES (linha 23)
 def __init__(self):
@@ -80,6 +81,7 @@ Esperado: reducao de ~100 ms para ~1-3 ms por chamada.
 **Arquivo:** eye_mouse/mouse_controller.py e eye_mouse/main.py
 
 **Mudanca em mouse_controller.py:** adicionar metodo safety_release():
+
 ```python
 def safety_release(self):
     """Libera qualquer botao pressionado. Chamar em pausas, erros e encerramento."""
@@ -90,6 +92,7 @@ def safety_release(self):
 ```
 
 **Mudanca em main.py:** chamar safety_release() em:
+
 - toggle_pause() quando paused=True
 - quit_app() antes de sys.exit()
 - camera_loop() antes de self.running = False (camera perdida)
@@ -109,6 +112,7 @@ test_main.py verificando que stop_drag e chamado nos eventos relevantes.
 **Arquivo:** eye_mouse/main.py e eye_mouse/ui/control_panel.py
 
 **Mudanca em main.py:** expor estado de deteccao de face:
+
 ```python
 # processing_loop
 face_detected = left_iris is not None and right_iris is not None
@@ -120,6 +124,7 @@ with self.data_lock:
 ```
 
 **Mudanca em control_panel.py:** adicionar label de status de face:
+
 ```python
 self.face_status_label = ttk.Label(status_frame, text="Rosto: Detectado",
                                     foreground="green")
@@ -154,6 +159,7 @@ em menos de 500 ms.
 **Arquivo:** eye_mouse/blink_detector.py e eye_mouse/config.py
 
 **Mudanca em config.py:** adicionar parametros de tempo real:
+
 ```python
 # Remover (ou manter como fallback comentado):
 # BLINK_MIN_FRAMES = 2
@@ -166,6 +172,7 @@ HOLD_DURATION_SEC = 1.5          # ja existente — usar com timestamp
 ```
 
 **Mudanca em blink_detector.py:** substituir contadores de frames por timestamps:
+
 ```python
 # ANTES
 self.left_closed_frames = 0
@@ -204,6 +211,7 @@ Testes existentes em test_blink_detector.py devem ser adaptados, nao removidos.
 **Arquivo:** eye_mouse/gaze_tracker.py
 
 **Mudanca:**
+
 ```python
 # ANTES
 options = vision.FaceLandmarkerOptions(
@@ -262,6 +270,7 @@ P9 (clamp de bordas) e P10 (allow_pickle).
 **Arquivo:** eye_mouse/ui/calibration_ui.py e eye_mouse/main.py
 
 **Estrategia:** adicionar timestamp de ultima atualizacao de gaze_raw:
+
 ```python
 # main.py — processing_loop
 with self.data_lock:
@@ -288,18 +297,19 @@ identico aparece duas vezes consecutivas no iris_points.
 **Arquivo:** eye_mouse/calibration.py
 
 **Estrategia:** separar 20% dos pontos para validacao antes do treinamento:
+
 ```python
 def compute_calibration(self):
     n = len(self.iris_points)
     if n < 6:
         return False, 0.0
-    
+  
     # Separar holdout (20% ou min 2 pontos)
     n_holdout = max(2, n // 5)
     indices = list(range(n))
     holdout_idx = indices[-n_holdout:]   # ultimos N pontos como holdout
     train_idx = indices[:-n_holdout]
-    
+  
     # Treinar com train_idx
     # Validar com holdout_idx
     # Retornar erro de holdout (nao de treino)
@@ -315,6 +325,7 @@ Com calibracao de 16 pontos: 3 pontos de holdout, 13 de treino.
 **Arquivo:** eye_mouse/config.py e eye_mouse/mouse_controller.py
 
 **Estrategia:**
+
 - Reduzir SCREEN_MARGIN de 50 para 0 (ou deixar configuravel).
 - Manter apenas clamp nos limites absolutos da tela (0 e screen_w/h).
 - Ajustar pontos de calibracao para incluir pontos nas bordas extremas.
@@ -335,6 +346,7 @@ final_y = max(0, min(self.screen_h - 1, smooth_y))
 **Arquivo:** eye_mouse/calibration.py
 
 **Estrategia:** salvar coeficientes como JSON (array de floats):
+
 ```python
 import json
 
@@ -416,6 +428,7 @@ a rotacao e translacao da cabeca e subtrair do vetor de olhar.
 Medir impacto. Se insuficiente, escalar para Opcao B.
 
 **Metrica:**
+
 - Mover cabeca 2 cm lateralmente com olhar fixo em ponto central.
 - Medir deslocamento do cursor antes e depois.
 - Meta: reducao de > 70% no drift.
@@ -468,6 +481,7 @@ class PipelineResult:
 ### 5.3 — Simplificar main.py
 
 processing_loop vira apenas:
+
 ```python
 def processing_loop(self):
     while self.running:
@@ -500,6 +514,7 @@ def _apply_result(self, result: PipelineResult):
 ### 6.1 — Scroll por Gaze (rolar paginas)
 
 **Estrategia:**
+
 - Zona de scroll superior/inferior da tela (ex: 10% borda superior/inferior).
 - Quando cursor entra nessas zonas por > 500 ms, aciona scroll.
 - Ou: piscar os dois olhos rapidamente dispara scroll (novo gesto no GestureEngine).
@@ -507,6 +522,7 @@ def _apply_result(self, result: PipelineResult):
 ### 6.2 — Perfis de Interacao
 
 **Estrategia:**
+
 - Salvar conjuntos de parametros (EMA_ALPHA, BLINK_EAR_THRESHOLD, etc.) por nome.
 - UI no ControlPanel para selecionar perfil ativo.
 - Arquivo de perfis: ~/Documents/EyeMouse/profiles.json
@@ -537,18 +553,18 @@ semitransparente ou cor diferente via ControlPanel.
 
 ## Tabela de Metricas por Milestone
 
-| Milestone | Metrica Principal | Meta | Como Medir |
-|---|---|---|---|
-| M0 | Baseline documentado | --- | Script de benchmark |
-| M1 | Latencia de moveTo() | < 10 ms | time.time() antes/apos |
-| M1 | Seguranca de liberacao | 100% dos casos | Teste manual + automatizado |
-| M2 | Timing de piscada | +/-10 ms de 66-500 ms | Timestamps reais |
-| M2 | Variancia iris estatica | Reducao >= 30% | Coleta de 100 frames estaticos |
-| M3 | Holdout error calibracao | Reportado com precisao | Log estruturado |
-| M3 | Cursor em bordas | 100% area acessivel | Teste manual em 4 bordas |
-| M4 | Drift por translacao 3cm | < 50 px | Medicao com regua fisica |
-| M5 | Complexidade processing_loop | < 20 linhas negocio | Contagem de linhas |
-| M6 | Scroll funcional | 3 apps diferentes | Teste manual documentado |
+| Milestone | Metrica Principal            | Meta                   | Como Medir                     |
+| --------- | ---------------------------- | ---------------------- | ------------------------------ |
+| M0        | Baseline documentado         | ---                    | Script de benchmark            |
+| M1        | Latencia de moveTo()         | < 10 ms                | time.time() antes/apos         |
+| M1        | Seguranca de liberacao       | 100% dos casos         | Teste manual + automatizado    |
+| M2        | Timing de piscada            | +/-10 ms de 66-500 ms  | Timestamps reais               |
+| M2        | Variancia iris estatica      | Reducao >= 30%         | Coleta de 100 frames estaticos |
+| M3        | Holdout error calibracao     | Reportado com precisao | Log estruturado                |
+| M3        | Cursor em bordas             | 100% area acessivel    | Teste manual em 4 bordas       |
+| M4        | Drift por translacao 3cm     | < 50 px                | Medicao com regua fisica       |
+| M5        | Complexidade processing_loop | < 20 linhas negocio    | Contagem de linhas             |
+| M6        | Scroll funcional             | 3 apps diferentes      | Teste manual documentado       |
 
 ---
 
@@ -557,6 +573,7 @@ semitransparente ou cor diferente via ControlPanel.
 ### Medicao Objetiva
 
 Para cada milestone, executar o script de benchmark antes e depois:
+
 ```
 python eye_mouse/utils/benchmark.py --duration 60 --output results/M{N}_{before|after}.json
 ```
@@ -567,6 +584,7 @@ taxa de frames processados vs descartados, uso de CPU/RAM.
 ### Reversao
 
 Cada mudanca usa feature flags em config.py:
+
 ```python
 # FEATURES (definir como False para reverter)
 FT_PYAUTOGUI_PAUSE_ZERO = True      # M1.1
@@ -584,13 +602,13 @@ FT_MIRROR_CAMERA = False            # M6.3 (desabilitado por padrao)
 
 ### Riscos de Regressao e Medidas
 
-| Risco | Probabilidade | Impacto | Mitigacao |
-|---|---|---|---|
-| Modo VIDEO do MediaPipe incompativel com versoes antigas | Medio | Alto | Testar em MediaPipe 0.10.x; fallback para modo IMAGE |
-| Compensacao de pose piora calibracao para usuarios sem movimento de cabeca | Medio | Medio | Feature flag; comparar holdout error antes/depois |
-| pyautogui.PAUSE=0 causa race condition em acoes rapidas | Baixo | Medio | Testar cliques rapidos multiplos; adicionar lock interno se necessario |
-| Mudanca de formato .npy para .json quebra calibracoes existentes | Alto | Medio | Fallback de leitura .npy implementado e testado |
-| Remocao de SCREEN_MARGIN causa cursor preso nas bordas da tela | Baixo | Baixo | Clamp em 0 e screen_w-1 permanece |
+| Risco                                                                      | Probabilidade | Impacto | Mitigacao                                                              |
+| -------------------------------------------------------------------------- | ------------- | ------- | ---------------------------------------------------------------------- |
+| Modo VIDEO do MediaPipe incompativel com versoes antigas                   | Medio         | Alto    | Testar em MediaPipe 0.10.x; fallback para modo IMAGE                   |
+| Compensacao de pose piora calibracao para usuarios sem movimento de cabeca | Medio         | Medio   | Feature flag; comparar holdout error antes/depois                      |
+| pyautogui.PAUSE=0 causa race condition em acoes rapidas                    | Baixo         | Medio   | Testar cliques rapidos multiplos; adicionar lock interno se necessario |
+| Mudanca de formato .npy para .json quebra calibracoes existentes           | Alto          | Medio   | Fallback de leitura .npy implementado e testado                        |
+| Remocao de SCREEN_MARGIN causa cursor preso nas bordas da tela             | Baixo         | Baixo   | Clamp em 0 e screen_w-1 permanece                                      |
 
 ---
 

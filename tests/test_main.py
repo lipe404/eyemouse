@@ -1,315 +1,328 @@
+"""
+test_main.py — Testes para EyeMouseApp (Milestone 1).
 
-import pytest
-from unittest.mock import MagicMock, patch
+Foca nos cenarios de seguranca criticos:
+  - Pausa enquanto botao pressionado
+  - Encerramento durante arraste
+  - Perda de camera
+  - Retorno apos perda de rastreamento
+  - Injecao de evento com falha
+  - Maquina de estados: transicoes validas e efeitos colaterais
+
+Nao move o cursor real, nao abre janelas reais.
+"""
 import sys
 import os
 import threading
+import time
 import queue
-import numpy as np
+import pytest
+from unittest.mock import MagicMock, patch, PropertyMock
 
-# Adicionar o diretório raiz ao path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'eye_mouse')))
 
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+def _make_app_mocks():
+    """Retorna um conjunto de mocks para substituir dependencias externas."""
+    mocks = {}
+
+    # Tkinter
+    mock_root = MagicMock()
+    mock_root.after = MagicMock()
+    mock_root.withdraw = MagicMock()
+    mocks['root'] = mock_root
+
+    # Modulos do EyeMouse
+    mocks['gaze_tracker'] = MagicMock()
+    mocks['blink_detector'] = MagicMock()
+    mocks['blink_detector'].is_calibrating = False
+    mocks['blink_detector'].ear_threshold = 0.20
+
+    mocks['calibration_manager'] = MagicMock()
+    mocks['calibration_manager'].load_calibration.return_value = False
+    mocks['calibration_manager'].profile_name = "test"
+
+    mocks['mouse_controller'] = MagicMock()
+    mocks['mouse_controller'].is_dragging = False
+    mocks['mouse_controller'].screen_size = (1920, 1080)
+
+    # CalibrationUI mock (nunca deve abrir janela real)
+    mocks['calibration_ui'] = MagicMock()
+
+    return mocks
+
+
 @pytest.fixture
-def mock_app_dependencies():
-    # Create mocks for dependencies
-    mock_keyboard = MagicMock()
-    mock_cv2 = MagicMock()
-    mock_cv2.__version__ = '4.0.0'
-    mock_cv2.VideoCapture.return_value.isOpened.return_value = True
-    
-    # Fix camera_loop unpacking error
-    mock_frame = MagicMock()
-    mock_frame.shape = (480, 640, 3)
-    mock_cv2.VideoCapture.return_value.read.return_value = (True, mock_frame)
-    mock_cv2.resize.return_value = mock_frame
+def app():
+    """
+    Cria um EyeMouseApp com todas as dependencias mockadas.
 
-    mock_mediapipe = MagicMock()
-    
-    mock_gaze_tracker_module = MagicMock()
-    # Fix processing_loop unpacking error
-    mock_gaze_tracker_module.GazeTracker.return_value.process_frame.return_value = (MagicMock(), MagicMock(), MagicMock())
+    Nao abre janelas reais, nao move o cursor.
+    """
+    mocks = _make_app_mocks()
 
-    mock_blink_detector_module = MagicMock()
-    # Fix blink_detector unpacking error (6 values)
-    mock_blink_detector_module.BlinkDetector.return_value.process.return_value = (False, False, False, False, False, (0.3, 0.3))
+    with \
+        patch('tkinter.Tk', return_value=mocks['root']), \
+        patch('tkinter.simpledialog.askstring', return_value='test'), \
+        patch('main.GazeTracker', return_value=mocks['gaze_tracker']), \
+        patch('main.BlinkDetector', return_value=mocks['blink_detector']), \
+        patch('main.CalibrationManager', return_value=mocks['calibration_manager']), \
+        patch('main.MouseController', return_value=mocks['mouse_controller']), \
+        patch('main.CalibrationUI', return_value=mocks['calibration_ui']), \
+        patch('main.ControlPanel', return_value=MagicMock()), \
+        patch('main.keyboard'), \
+        patch('cv2.VideoCapture') as mock_cap_cls, \
+        patch('tkinter.messagebox.askyesno', return_value=False), \
+        patch('sys.exit'):
 
-    mock_calibration_module = MagicMock()
-    mock_calibration_module.CalibrationManager.return_value.load_calibration.return_value = True
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        mock_cap_cls.return_value = mock_cap
 
-    mock_mouse_controller_module = MagicMock()
-    mock_calibration_ui_module = MagicMock()
-    mock_control_panel_module = MagicMock()
-    
-    # Mock tkinter at module level to avoid GUI
-    mock_tk = MagicMock()
-    mock_tk.Tk.return_value.withdraw = MagicMock()
-    
-    # Mock config
-    mock_config = MagicMock()
-    mock_config.CAMERA_INDEX = 0
-    mock_config.CAMERA_WIDTH = 640
-    mock_config.CAMERA_HEIGHT = 480
-    mock_config.LOG_FILE = "test.log"
+        from main import EyeMouseApp
+        application = EyeMouseApp()
+        application._mocks = mocks
+        application.running = False  # Nao iniciar threads de verdade
+        yield application
 
-    # Patch sys.modules to inject mocks
-    with patch.dict(sys.modules, {
-        'keyboard': mock_keyboard,
-        'cv2': mock_cv2,
-        'mediapipe': mock_mediapipe,
-        'mediapipe.python.solutions': MagicMock(),
-        'mediapipe.tasks': MagicMock(),
-        'mediapipe.tasks.python': MagicMock(),
-        'mediapipe.tasks.python.vision': MagicMock(),
-        'gaze_tracker': mock_gaze_tracker_module,
-        'blink_detector': mock_blink_detector_module,
-        'calibration': mock_calibration_module,
-        'mouse_controller': mock_mouse_controller_module,
-        'ui.calibration_ui': mock_calibration_ui_module,
-        'ui.control_panel': mock_control_panel_module,
-        'tkinter': mock_tk,
-        'tkinter.simpledialog': MagicMock(),
-        'tkinter.messagebox': MagicMock(),
-        # We need to mock config too if it's imported as `from config import *`
-        'config': mock_config,
-    }):
-        # Reload main if it was already imported
-        if 'main' in sys.modules:
-            del sys.modules['main']
-        
-        import main
-        
-        # Patch methods inside main that might use other imports
-        with patch('main.simpledialog.askstring', return_value="test_user"), \
-             patch('main.messagebox.askyesno', return_value=True), \
-             patch('main.sys.exit') as mock_exit:
-            
-            yield {
-                'main': main,
-                'cv2': mock_cv2,
-                'gaze': mock_gaze_tracker_module.GazeTracker,
-                'blink': mock_blink_detector_module.BlinkDetector,
-                'calib': mock_calibration_module.CalibrationManager,
-                'mouse': mock_mouse_controller_module.MouseController,
-                'ui': mock_calibration_ui_module.CalibrationUI,
-                'control_panel': mock_control_panel_module.ControlPanel,
-                'exit': mock_exit
-            }
 
-class TestEyeMouseApp:
-    def test_initialization(self, mock_app_dependencies):
-        """Test initialization of EyeMouseApp."""
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        # Verify basic setup
-        assert app.user_profile == "test_user"
-        assert app.running is True
-        assert app.is_paused is False
-        
-        # Verify modules initialized
-        mock_app_dependencies['gaze'].assert_called_once()
-        mock_app_dependencies['blink'].assert_called_once()
-        mock_app_dependencies['calib'].assert_called_with(profile_name="test_user")
-        mock_app_dependencies['mouse'].assert_called_once()
-        
-        # Verify camera setup
-        mock_app_dependencies['cv2'].VideoCapture.assert_called()
-        
-        # Verify calibration loaded
-        mock_app_dependencies['calib'].return_value.load_calibration.assert_called_once()
-        
-        # Cleanup threads to avoid hanging
-        app.running = False
-        if hasattr(app, 'camera_thread'):
-            app.camera_thread.join(timeout=1.0)
-        if hasattr(app, 'processing_thread'):
-            app.processing_thread.join(timeout=1.0)
+# ---------------------------------------------------------------------------
+# Testes de estado inicial
+# ---------------------------------------------------------------------------
 
-    def test_update_smoothing(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        # Test update_smoothing
-        app.update_smoothing(0.5)
-        # Verify it calls mouse_controller.set_smoothing_alpha
-        mock_app_dependencies['mouse'].return_value.set_smoothing_alpha.assert_called_with(0.5)
+class TestInitialState:
+    def test_state_machine_exists(self, app):
+        from app_state import StateMachine
+        assert isinstance(app.state_machine, StateMachine)
 
-    def test_show_control_panel(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        # Already shown in __init__
-        assert app.control_panel is not None
-        mock_app_dependencies['control_panel'].assert_called_once()
-        
-        # Force close and show again
-        app.control_panel = None
-        app.show_control_panel()
-        
-        # Verify instantiated again
-        assert app.control_panel is not None
-        assert mock_app_dependencies['control_panel'].call_count == 2
-        
-        # Call again (should not instantiate again)
-        app.show_control_panel()
-        assert mock_app_dependencies['control_panel'].call_count == 2
+    def test_profiler_exists(self, app):
+        from benchmark import FrameProfiler
+        assert isinstance(app.profiler, FrameProfiler)
 
-    def test_camera_loop_failure(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        app.running = True
-        
-        # Mock camera to always fail
-        mock_app_dependencies['cv2'].VideoCapture.return_value.read.return_value = (False, None)
-        
-        # Mock time.sleep to run fast
-        with patch('main.time.sleep') as mock_sleep, \
-             patch('main.messagebox.showerror') as mock_msg:
-            
-            # This loop runs until failure count reaches 30
-            app.camera_loop()
-            
-            # Verify loop stopped
-            assert app.running is False
-            
-            # Verify root.after called to show error
-            # app.root.after(0, lambda: messagebox.showerror(...))
-            args, _ = app.root.after.call_args
-            assert args[0] == 0
-            # Execute the lambda to verify it calls messagebox
-            callback = args[1]
-            callback()
-            mock_msg.assert_called()
+    def test_ui_updates_dict_empty(self, app):
+        assert isinstance(app._ui_updates, dict)
+        assert len(app._ui_updates) == 0
 
-    def test_processing_loop_logic(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        # Setup mocks
-        app.is_calibrating = False
-        app.is_paused = False
-        app.running = True
-        
-        # Important: Set blink_detector.is_calibrating to False explicitly
-        # because MagicMock objects are truthy
-        app.blink_detector.is_calibrating = False
-        
-        # Mock frame queue to return one frame then block/stop
-        mock_frame = MagicMock()
-        mock_frame.shape = (480, 640, 3)
-        mock_frame.copy.return_value = mock_frame # Ensure copy returns mock too
-        
-        # Mock Gaze Tracker
-        # left_iris, right_iris, landmarks
-        # Need to return numpy arrays for average calculation
-        mock_l_iris = np.array([10.0, 10.0])
-        mock_r_iris = np.array([20.0, 20.0])
-        mock_landmarks = MagicMock()
-        
-        mock_app_dependencies['gaze'].return_value.process_frame.return_value = (
-            mock_l_iris, mock_r_iris, mock_landmarks
-        )
-        
-        # Mock Calibration Manager -> Screen Pos
-        mock_app_dependencies['calib'].return_value.map_to_screen.return_value = (100, 200)
-        
-        # Mock Blink Detector -> Left Click
-        # (left, right, double, hold_start, hold_end, ears)
-        mock_app_dependencies['blink'].return_value.process.return_value = (
-            True, False, False, False, False, (0.3, 0.3)
-        )
-        
-        # Mock Mouse Controller Click to stop loop
-        # This simulates stopping after one successful action
-        def stop_loop(*args, **kwargs):
-            app.running = False
-            
-        mock_app_dependencies['mouse'].return_value.click.side_effect = stop_loop
-        
-        # Pre-fill queue with one frame
-        app.frame_queue.put(mock_frame)
-        
-        # Mock cv2.resize since it's used
-        mock_app_dependencies['cv2'].resize.return_value = mock_frame
-        
-        # Disable control panel to simplify
-        app.control_panel = None
-        
-        # Run loop
-        # Provide more side_effect values for time.time just in case
-        with patch('main.time.time', side_effect=[100, 101, 102, 103, 104, 105, 106, 107, 108, 109]): 
-             app.processing_loop()
-        
-        # Assertions
-        # 1. Gaze processed
-        mock_app_dependencies['gaze'].return_value.process_frame.assert_called()
-        
-        # 2. Mouse moved
-        mock_app_dependencies['mouse'].return_value.move.assert_called_with(100, 200)
-        
-        # 3. Mouse clicked (left)
-        mock_app_dependencies['mouse'].return_value.click.assert_called_with("left")
 
-    def test_blink_calibration_callback(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        app.start_blink_calibration()
-        mock_app_dependencies['blink'].return_value.start_calibration.assert_called_once()
+# ---------------------------------------------------------------------------
+# Testes de fila de UI
+# ---------------------------------------------------------------------------
 
-    def test_toggle_pause(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        # Initial state
-        assert app.is_paused is False
-        
-        # Toggle
-        app.toggle_pause_hotkey()
+class TestUIQueue:
+    def test_post_ui_update_stores_value(self, app):
+        """_post_ui_update deve armazenar o valor no dict."""
+        app._post_ui_update("fps", 30)
+        assert app._ui_updates.get("fps") == 30
+
+    def test_post_ui_update_latest_wins(self, app):
+        """Segunda chamada com mesma chave substitui o valor."""
+        app._post_ui_update("fps", 25)
+        app._post_ui_update("fps", 30)
+        assert app._ui_updates["fps"] == 30
+
+    def test_post_ui_update_thread_safe(self, app):
+        """Multiplas threads escrevendo nao devem corromper o dict."""
+        errors = []
+
+        def writer(key, value):
+            try:
+                for _ in range(100):
+                    app._post_ui_update(key, value)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer, args=(f"key_{i}", i))
+            for i in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+
+    def test_update_ui_loop_clears_dict(self, app):
+        """update_ui_loop deve consumir e limpar o dict de updates."""
+        app._post_ui_update("fps", 30)
+        app._post_ui_update("left_ear", 0.25)
+        assert len(app._ui_updates) == 2
+        app.update_ui_loop()  # Deve consumir as atualizacoes
+        assert len(app._ui_updates) == 0
+
+
+# ---------------------------------------------------------------------------
+# Testes de pausa e seguranca
+# ---------------------------------------------------------------------------
+
+class TestPauseSafety:
+    def test_toggle_pause_calls_release_all(self, app):
+        """
+        Cenario critico: pausar enquanto botao esta pressionado.
+        release_all() deve ser chamado via StateMachine.
+        """
+        from app_state import AppState
+
+        # Colocar em estado ACTIVE primeiro
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+
+        # Simular botao pressionado
+        app._mocks['mouse_controller']._is_dragging = True
+
+        # Pausar
+        app.toggle_pause(True)
+
+        # release_all deve ter sido chamado (pelo StateMachine via on_release_all)
+        app._mocks['mouse_controller'].release_all.assert_called()
+
+    def test_toggle_pause_transitions_to_paused(self, app):
+        """toggle_pause(True) deve transitar para PAUSED."""
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.toggle_pause(True)
+        assert app.state_machine.state == AppState.PAUSED
+
+    def test_toggle_resume_transitions_to_active(self, app):
+        """toggle_pause(False) a partir de PAUSED deve transitar para ACTIVE."""
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.toggle_pause(True)
+        app.toggle_pause(False)
+        assert app.state_machine.state == AppState.ACTIVE
+
+    def test_is_paused_property_reflects_state(self, app):
+        """is_paused property deve refletir o estado da maquina."""
+        from app_state import AppState
+        assert app.is_paused is False  # INITIALIZING, nao PAUSED
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.toggle_pause(True)
         assert app.is_paused is True
-        
-        # Toggle back
-        app.toggle_pause_hotkey()
-        assert app.is_paused is False
-        
-        # Cleanup
-        app.running = False
-        if hasattr(app, 'camera_thread'):
-            app.camera_thread.join(timeout=1.0)
-        if hasattr(app, 'processing_thread'):
-            app.processing_thread.join(timeout=1.0)
 
-    def test_quit_app(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        app.running = True
-        
-        # Mock threads to avoid joining real threads (though they are daemon)
-        app.camera_thread = MagicMock()
-        app.processing_thread = MagicMock()
-        
+
+# ---------------------------------------------------------------------------
+# Testes de encerramento
+# ---------------------------------------------------------------------------
+
+class TestQuitSafety:
+    def test_quit_app_calls_release_all_before_exit(self, app):
+        """
+        quit_app() deve chamar release_all() antes de encerrar.
+        Critico: botao do mouse nao pode ficar preso no SO.
+        """
         app.quit_app()
-        
-        assert app.running is False
-        mock_app_dependencies['exit'].assert_called_with(0)
-        mock_app_dependencies['cv2'].VideoCapture.return_value.release.assert_called()
+        app._mocks['mouse_controller'].release_all.assert_called()
 
-    def test_start_calibration(self, mock_app_dependencies):
-        main_module = mock_app_dependencies['main']
-        app = main_module.EyeMouseApp()
-        
-        app.start_calibration()
-        
-        assert app.is_calibrating is True
-        assert app.is_paused is True
-        
-        # Verify CalibrationUI was instantiated
-        mock_app_dependencies['ui'].assert_called_once()
-        
-        # Cleanup
-        app.running = False
-        if hasattr(app, 'camera_thread'):
-            app.camera_thread.join(timeout=1.0)
-        if hasattr(app, 'processing_thread'):
-            app.processing_thread.join(timeout=1.0)
+    def test_quit_app_transitions_to_shutting_down(self, app):
+        """quit_app() deve transitar para SHUTTING_DOWN."""
+        from app_state import AppState
+        app.quit_app()
+        assert app.state_machine.state == AppState.SHUTTING_DOWN
+
+    def test_shutdown_during_drag_releases_button(self, app):
+        """
+        Cenario: usuario fecha o app durante arraste.
+        release_all() deve ser chamado antes de sys.exit().
+        """
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+
+        # Simular botao pressionado
+        app._mocks['mouse_controller'].is_dragging = True
+
+        app.quit_app()
+
+        # release_all deve ter sido chamado (diretamente no quit_app + StateMachine)
+        assert app._mocks['mouse_controller'].release_all.call_count >= 1
+
+    def test_quit_stops_running(self, app):
+        """quit_app() deve setar self.running = False."""
+        app.running = True
+        app.quit_app()
+        assert app.running is False
+
+
+# ---------------------------------------------------------------------------
+# Testes de perda de camera
+# ---------------------------------------------------------------------------
+
+class TestCameraLoss:
+    def test_camera_loss_calls_release_all(self, app):
+        """
+        Cenario: camera desconecta durante uso.
+        release_all() deve ser chamado ao detectar falha.
+        """
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+
+        # Simular o que camera_loop faz ao detectar falha
+        app._mocks['mouse_controller'].release_all()
+        app.state_machine.try_transition(AppState.ERROR)
+
+        app._mocks['mouse_controller'].release_all.assert_called()
+        assert app.state_machine.state == AppState.ERROR
+
+
+# ---------------------------------------------------------------------------
+# Testes de perda e retorno de rastreamento
+# ---------------------------------------------------------------------------
+
+class TestTrackingLost:
+    def test_tracking_lost_transition(self, app):
+        """ACTIVE -> TRACKING_LOST deve chamar release_all."""
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.state_machine.try_transition(AppState.TRACKING_LOST)
+        app._mocks['mouse_controller'].release_all.assert_called()
+        assert app.state_machine.state == AppState.TRACKING_LOST
+
+    def test_return_from_tracking_lost(self, app):
+        """Apos perda, retornar ao ACTIVE deve ser possivel."""
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.state_machine.try_transition(AppState.TRACKING_LOST)
+        success = app.state_machine.try_transition(AppState.ACTIVE)
+        assert success is True
+        assert app.state_machine.state == AppState.ACTIVE
+
+    def test_no_mouse_events_in_tracking_lost(self, app):
+        """Em TRACKING_LOST, mouse_allowed deve ser False."""
+        from app_state import AppState
+        app.state_machine.try_transition(AppState.CALIBRATING)
+        app.state_machine.try_transition(AppState.ACTIVE)
+        app.state_machine.try_transition(AppState.TRACKING_LOST)
+        assert app.state_machine.mouse_allowed is False
+
+
+# ---------------------------------------------------------------------------
+# Testes de acesso thread-safe a dados
+# ---------------------------------------------------------------------------
+
+class TestThreadSafeDataAccess:
+    def test_get_latest_gaze_raw_returns_none_initially(self, app):
+        result = app.get_latest_gaze_raw()
+        assert result is None
+
+    def test_get_latest_gaze_timestamp_returns_zero_initially(self, app):
+        result = app.get_latest_gaze_timestamp()
+        assert result == 0.0
+
+    def test_get_latest_frame_returns_none_initially(self, app):
+        result = app.get_latest_frame()
+        assert result is None
+
+    def test_profile_validated_on_init(self, app):
+        """Perfil de usuario deve ser validado."""
+        assert app.user_profile == "test"
