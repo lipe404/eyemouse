@@ -15,20 +15,22 @@ import warnings
 # ---------------------------------------------------------------------------
 _PY = sys.version_info
 if _PY >= (3, 13):
-    warnings.warn(
-        f"Python {_PY.major}.{_PY.minor} detectado. "
-        "O MediaPipe não possui wheels oficiais para Python 3.13+ no Windows. "
-        "Use Python 3.11 ou 3.12 para garantir compatibilidade.",
-        RuntimeWarning,
-        stacklevel=1,
-    )
+    try:
+        import mediapipe  # noqa: F401
+    except ImportError:
+        warnings.warn(
+            f"Python {_PY.major}.{_PY.minor} detectado e MediaPipe não instalado. "
+            "Caso ocorram erros de compilação ou instalação, utilize Python 3.11 ou 3.12.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
 
 # ---------------------------------------------------------------------------
 # Funções de caminho
 # ---------------------------------------------------------------------------
 
-def get_resource_path(relative_path):
+def get_resource_path(relative_path: str) -> str:
     """
     Retorna o caminho absoluto para recursos, funcionando para dev e PyInstaller.
 
@@ -38,12 +40,32 @@ def get_resource_path(relative_path):
     Returns:
         str: O caminho absoluto para o recurso.
     """
-    try:
-        # PyInstaller cria um diretório temporário e armazena o caminho em _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+
+    if os.path.isabs(relative_path) and os.path.exists(relative_path):
+        return relative_path
+
+    # Candidatos para busca do recurso em ambiente de desenvolvimento:
+    # 1. Diretório do pacote (eye_mouse/)
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate_pkg = os.path.join(pkg_dir, relative_path)
+    if os.path.exists(candidate_pkg):
+        return candidate_pkg
+
+    # 2. Diretório raiz do repositório (pai de eye_mouse/)
+    root_dir = os.path.dirname(pkg_dir)
+    candidate_root = os.path.join(root_dir, relative_path)
+    if os.path.exists(candidate_root):
+        return candidate_root
+
+    # 3. Subpasta eye_mouse a partir do CWD atual
+    candidate_cwd_pkg = os.path.join(os.path.abspath("."), "eye_mouse", relative_path)
+    if os.path.exists(candidate_cwd_pkg):
+        return candidate_cwd_pkg
+
+    # 4. Fallback padrão: CWD
+    return os.path.join(os.path.abspath("."), relative_path)
 
 
 def get_user_data_dir():
