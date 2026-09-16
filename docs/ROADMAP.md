@@ -150,9 +150,10 @@ em menos de 500 ms.
 
 ## Milestone 2 — Estabilidade da Deteccao de Piscada e Camera
 
-**Objetivo:** Corrigir P7 (timing FPS-dependente) e P2 (modo MediaPipe).
+**Objetivo:** Otimizar captura de vídeo, processamento de imagem, modos do MediaPipe, validação temporal e mitigação de latência.
 **Dependencias:** Milestone 1 concluido.
 **Estimativa:** 2-3 dias.
+**Status:** CONCLUÍDO (2026-09-16)
 
 ### 2.1 — Timing de Piscada Baseado em Tempo Real (P7)
 

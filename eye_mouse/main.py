@@ -1,17 +1,16 @@
-"""
+﻿"""
 main.py — Ponto de entrada e orquestrador do EyeMouse.
 
-Mudanças do Milestone 1:
-  - AppState machine integrada (estados explícitos, transições validadas).
-  - release_all() chamado em TODAS as transições de estado que encerram
-    o modo ativo (pausa, erro, encerramento, perda de câmera).
-  - Fila de atualizações de UI (latest-wins dict): sem acumulação de
-    chamadas root.after() do loop de processamento.
-  - Benchmark integrado (FrameProfiler) — coleta métricas por etapa.
-  - BENCHMARK_MODE: roda pipeline sem mover cursor real.
-  - Validação de perfil (CalibrationManager agora valida nomes).
-  - Detecção de TRACKING_LOST com timeout configurável.
+Otimizações do Milestone 2:
+  - Integração com CameraCapture (buffer mínimo latest-frame, seleção de backends).
+  - Integração com TrackingValidator (supressão de frames expirados e período de estabilização pós-perda).
+  - Rastreamento estruturado com FramePacket e TrackingResult.
+  - Separação estrita da última observação válida do último frame de preview visual.
+  - Frequência de preview desacoplada (PREVIEW_FPS) e preview opcional (SHOW_PREVIEW).
+  - Garantia formal de que frames atrasados ou não estabilizados não movem cursor nem geram cliques.
 """
+from __future__ import annotations
+
 import cv2
 import threading
 import time
@@ -21,10 +20,12 @@ import numpy as np
 import logging
 import sys
 import queue
+import re
+from typing import Any, Dict, Optional
+
 try:
     import keyboard
 except ImportError:
-    # Stub para ambientes de teste sem a biblioteca keyboard instalada
     class _KeyboardStub:
         def add_hotkey(self, *a, **kw): pass
         def unhook_all(self): pass
@@ -38,16 +39,20 @@ from ui.calibration_ui import CalibrationUI
 from ui.control_panel import ControlPanel
 from app_state import AppState, StateMachine, InvalidTransition
 from benchmark import FrameProfiler
+from frame_data import FramePacket, TrackingResult
+from tracking_validator import TrackingValidator
+from camera_capture import CameraCapture
+
 from config import (
-    CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT,
+    CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, TARGET_FPS,
+    CAMERA_BACKEND, CAMERA_FOURCC, CAMERA_BUFFER_SIZE,
     LOG_FILE, CALIBRATION_REPROJECTION_ERROR_THRESHOLD,
     TRACKING_LOST_TIMEOUT_SEC, BENCHMARK_MODE,
-    FT_STATE_MACHINE, FT_SAFETY_RELEASE,
+    MAX_OBSERVATION_AGE_SEC, TRACKING_STABILIZATION_FRAMES,
+    TRACKING_STABILIZATION_TIME_SEC, SHOW_PREVIEW, PREVIEW_FPS, DEBUG_DRAW,
+    FT_STATE_MACHINE, FT_SAFETY_RELEASE, FT_LATEST_FRAME_QUEUE, FT_TRACKING_VALIDATOR
 )
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 try:
     logging.basicConfig(
         filename=LOG_FILE,
@@ -67,13 +72,9 @@ logger = logging.getLogger(__name__)
 class EyeMouseApp:
     """
     Classe principal da aplicação EyeMouse.
-
-    Gerencia o ciclo de vida, threads de câmera e processamento,
-    interface de usuário e coordenação entre os módulos.
     """
 
     def __init__(self):
-        """Inicializa a aplicação."""
         self.root = tk.Tk()
         self.root.withdraw()
 
@@ -84,42 +85,50 @@ class EyeMouseApp:
             parent=self.root,
         )
         self.user_profile = raw_profile.strip() if raw_profile and raw_profile.strip() else "default"
-        # Sanitizar: aceitar apenas caracteres válidos; fallback para 'default'
-        import re
         if not re.match(r'^[A-Za-z0-9_\-]{1,64}$', self.user_profile):
             logger.warning("Perfil '%s' inválido; usando 'default'.", self.user_profile)
             self.user_profile = "default"
 
         # --- Estado compartilhado (thread-safe) ---
         self.data_lock = threading.Lock()
-        self.latest_gaze_raw = None          # (x, y) normalizado
-        self.latest_gaze_timestamp: float = 0.0   # timestamp da última atualização
-        self.latest_frame = None             # Frame anotado para CalibrationUI
-        self.last_face_time: float = 0.0     # Timestamp da última detecção de rosto
+        self.latest_gaze_raw: Optional[np.ndarray] = None
+        self.latest_gaze_timestamp: float = 0.0
+        self.latest_frame: Optional[np.ndarray] = None
+        self.last_face_time: float = 0.0
 
-        # --- Fila de frames (câmera → processamento) ---
+        # Separação explícita da última observação válida vs último frame de preview
+        self.latest_valid_observation: Optional[TrackingResult] = None
+        self.latest_preview_frame: Optional[np.ndarray] = None
+        self._last_preview_render_time: float = 0.0
+
+        # Fila de frames (câmera -> processamento)
         self.frame_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._legacy_frame_counter: int = 0
 
-        # --- Fila de atualizações da UI (latest-wins dict) ---
-        # O loop de processamento escreve; o update_ui_loop lê na thread principal.
-        self._ui_updates: dict = {}
+        # Fila de atualizações da UI (latest-wins)
+        self._ui_updates: Dict[str, Any] = {}
         self._ui_lock = threading.Lock()
 
-        # --- Controle de execução ---
+        # Controle de execução
         self.running: bool = False
         self.calibration_ui = None
         self.control_panel = None
 
-        # --- Benchmark ---
+        # Benchmark e Validador Temporal
         self.profiler = FrameProfiler()
+        self.validator = TrackingValidator(
+            max_observation_age_sec=MAX_OBSERVATION_AGE_SEC,
+            stabilization_frames=TRACKING_STABILIZATION_FRAMES,
+            stabilization_time_sec=TRACKING_STABILIZATION_TIME_SEC,
+        )
 
-        # --- Hotkey global ---
+        # Hotkey global
         try:
             keyboard.add_hotkey("ctrl+shift+p", self._hotkey_toggle_pause)
         except Exception as exc:
             logger.error("Erro ao registrar hotkey: %s", exc)
 
-        # --- Módulos ---
+        # Inicializar módulos de visão e controle
         try:
             self.gaze_tracker = GazeTracker()
             self.blink_detector = BlinkDetector()
@@ -131,32 +140,48 @@ class EyeMouseApp:
             messagebox.showerror("Erro Fatal", f"Falha ao iniciar: {exc}")
             sys.exit(1)
 
-        # --- Máquina de estados ---
-        # on_release_all é chamado automaticamente em transições críticas.
+        # Máquina de estados
         self.state_machine = StateMachine(
             initial=AppState.INITIALIZING,
             on_release_all=self.mouse_controller.release_all if FT_SAFETY_RELEASE else None,
         )
 
-        # --- Câmera ---
-        self.cap = cv2.VideoCapture(CAMERA_INDEX)
-        if not self.cap.isOpened():
-            logger.error("Câmera não encontrada (index %d).", CAMERA_INDEX)
-            messagebox.showerror(
-                "Erro de Câmera",
-                f"Não foi possível acessar a câmera (index {CAMERA_INDEX}).",
-            )
-            sys.exit(1)
+        # Câmera e Captura (com suporte ao CameraCapture otimizado e fallback defensivo)
+        self.camera_capture: Optional[CameraCapture] = None
+        self.cap = None
 
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        if FT_LATEST_FRAME_QUEUE:
+            try:
+                self.camera_capture = CameraCapture(
+                    camera_index=CAMERA_INDEX,
+                    width=CAMERA_WIDTH,
+                    height=CAMERA_HEIGHT,
+                    fps=TARGET_FPS,
+                    backend=CAMERA_BACKEND,
+                    fourcc=CAMERA_FOURCC,
+                    buffer_size=CAMERA_BUFFER_SIZE,
+                )
+                self.camera_capture.start()
+                self.cap = self.camera_capture.cap
+            except Exception as exc:
+                logger.warning("Falha na inicialização do CameraCapture (%s). Tentando cv2.VideoCapture...", exc)
+
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(CAMERA_INDEX)
+            if not self.cap.isOpened():
+                logger.error("Câmera não encontrada (index %d).", CAMERA_INDEX)
+                messagebox.showerror(
+                    "Erro de Câmera",
+                    f"Não foi possível acessar a câmera (index {CAMERA_INDEX}).",
+                )
+                sys.exit(1)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 
         if BENCHMARK_MODE:
-            logger.info(
-                "BENCHMARK_MODE ativo: pipeline roda mas cursor NÃO será movido."
-            )
+            logger.info("BENCHMARK_MODE ativo: pipeline roda mas cursor NÃO será movido.")
 
-        # --- Iniciar fluxo de calibração ou controle ---
+        # Iniciar fluxo de calibração ou controle
         if self.calibration_manager.load_calibration():
             use_calib = messagebox.askyesno(
                 "Calibração Encontrada",
@@ -169,7 +194,7 @@ class EyeMouseApp:
         else:
             self.start_calibration()
 
-        # --- Iniciar threads ---
+        # Iniciar threads
         self.running = True
         self.camera_thread = threading.Thread(
             target=self.camera_loop, daemon=True, name="camera"
@@ -181,7 +206,7 @@ class EyeMouseApp:
         )
         self.processing_thread.start()
 
-        # Loop de atualização da UI (100 ms)
+        # Loop de atualização da UI
         self.root.after(100, self.update_ui_loop)
 
     # ------------------------------------------------------------------
@@ -189,7 +214,6 @@ class EyeMouseApp:
     # ------------------------------------------------------------------
 
     def _enter_active_after_calibration_load(self):
-        """Transita para ACTIVE após carregar calibração existente."""
         try:
             self.state_machine.transition(AppState.CALIBRATING)
             self.state_machine.transition(AppState.ACTIVE)
@@ -198,9 +222,9 @@ class EyeMouseApp:
         self.show_control_panel()
 
     def start_calibration(self):
-        """Inicia o processo de calibração de tela."""
         logger.info("Iniciando calibração...")
         self.state_machine.try_transition(AppState.CALIBRATING)
+        self.validator.reset()
 
         if self.control_panel:
             self.control_panel.window.withdraw()
@@ -214,7 +238,6 @@ class EyeMouseApp:
         )
 
     def start_blink_calibration(self):
-        """Inicia a calibração automática de piscada."""
         self.blink_detector.start_calibration(duration=10.0)
         messagebox.showinfo(
             "Calibração de Piscada",
@@ -223,12 +246,6 @@ class EyeMouseApp:
         )
 
     def on_calibration_complete(self, cancelled: bool = False):
-        """
-        Callback chamado ao finalizar a calibração.
-
-        Args:
-            cancelled: True se o usuário cancelou.
-        """
         if cancelled:
             logger.info("Calibração cancelada.")
             self.state_machine.try_transition(AppState.ACTIVE)
@@ -269,12 +286,7 @@ class EyeMouseApp:
         else:
             self.show_control_panel()
 
-    # ------------------------------------------------------------------
-    # Painel de controle
-    # ------------------------------------------------------------------
-
     def show_control_panel(self):
-        """Exibe o painel de controle flutuante."""
         if not self.control_panel:
             self.control_panel = ControlPanel(
                 self.root,
@@ -285,12 +297,7 @@ class EyeMouseApp:
                 self.start_blink_calibration,
             )
 
-    # ------------------------------------------------------------------
-    # Pausa
-    # ------------------------------------------------------------------
-
     def _hotkey_toggle_pause(self):
-        """Callback para Ctrl+Shift+P (thread da biblioteca keyboard)."""
         currently_paused = self.state_machine.state == AppState.PAUSED
         new_paused = not currently_paused
         self.toggle_pause(new_paused)
@@ -300,15 +307,6 @@ class EyeMouseApp:
             )
 
     def toggle_pause(self, paused: bool):
-        """
-        Alterna o estado de pausa.
-
-        Em qualquer transição para PAUSED, release_all() é chamado
-        automaticamente pelo StateMachine.
-
-        Args:
-            paused: True para pausar, False para retomar.
-        """
         if paused:
             success = self.state_machine.try_transition(AppState.PAUSED)
             if success:
@@ -317,10 +315,9 @@ class EyeMouseApp:
             success = self.state_machine.try_transition(AppState.ACTIVE)
             if success:
                 logger.info("Aplicação retomada.")
-                # Reiniciar filtro de suavização para evitar salto de cursor
                 self.mouse_controller.reset_smoothing()
+                self.validator.reset()
 
-    # Mantido para compatibilidade com ControlPanel (is_paused como bool)
     @property
     def is_paused(self) -> bool:
         return self.state_machine.state == AppState.PAUSED
@@ -333,49 +330,40 @@ class EyeMouseApp:
     # Acesso a dados thread-safe
     # ------------------------------------------------------------------
 
-    def get_latest_gaze_raw(self):
-        """Retorna a posição do olhar mais recente (thread-safe)."""
+    def get_latest_gaze_raw(self) -> Optional[np.ndarray]:
         with self.data_lock:
             return self.latest_gaze_raw
 
     def get_latest_gaze_timestamp(self) -> float:
-        """Retorna o timestamp da última atualização de gaze (thread-safe)."""
         with self.data_lock:
             return self.latest_gaze_timestamp
 
-    def get_latest_frame(self):
-        """Retorna o frame mais recente (thread-safe, cópia)."""
+    def get_latest_frame(self) -> Optional[np.ndarray]:
         with self.data_lock:
             if self.latest_frame is not None:
                 return self.latest_frame.copy()
             return None
 
-    # ------------------------------------------------------------------
-    # Suavização
-    # ------------------------------------------------------------------
+    def get_latest_valid_observation(self) -> Optional[TrackingResult]:
+        with self.data_lock:
+            return self.latest_valid_observation
 
-    def update_smoothing(self, value):
-        """Atualiza o fator de suavização do cursor."""
+    def get_latest_preview_frame(self) -> Optional[np.ndarray]:
+        with self.data_lock:
+            if self.latest_preview_frame is not None:
+                return self.latest_preview_frame.copy()
+            return None
+
+    def update_smoothing(self, value: float):
         self.mouse_controller.set_smoothing_alpha(value)
 
-    # ------------------------------------------------------------------
-    # Encerramento
-    # ------------------------------------------------------------------
-
     def quit_app(self):
-        """
-        Encerra a aplicação de forma segura.
-
-        Garante que todos os botões do mouse sejam liberados antes de sair.
-        """
         logger.info("Encerrando aplicação...")
         self.running = False
 
-        # Liberar botões ANTES de qualquer outra ação
         if FT_SAFETY_RELEASE:
             self.mouse_controller.release_all()
 
-        # Transitar para SHUTTING_DOWN (também chama release_all via StateMachine)
         self.state_machine.try_transition(AppState.SHUTTING_DOWN)
 
         try:
@@ -383,10 +371,14 @@ class EyeMouseApp:
         except Exception:
             pass
 
-        if self.cap.isOpened():
+        if self.camera_capture:
+            self.camera_capture.release()
+        elif self.cap and self.cap.isOpened():
             self.cap.release()
 
-        # Logar relatório de benchmark antes de sair
+        # Fechar explicitamente o MediaPipe
+        self.gaze_tracker.close()
+
         report = self.profiler.report()
         logger.info("Relatório de benchmark:\n%s", report)
 
@@ -394,25 +386,14 @@ class EyeMouseApp:
         sys.exit(0)
 
     # ------------------------------------------------------------------
-    # Fila de atualizações da UI
+    # Fila da UI (latest-wins)
     # ------------------------------------------------------------------
 
-    def _post_ui_update(self, key: str, value) -> None:
-        """
-        Publica uma atualização para a UI de forma thread-safe.
-
-        Usa semântica "latest-wins": apenas o valor mais recente de
-        cada chave é mantido, evitando acumulação de callbacks root.after().
-        """
+    def _post_ui_update(self, key: str, value: Any) -> None:
         with self._ui_lock:
             self._ui_updates[key] = value
 
     def update_ui_loop(self):
-        """
-        Consome atualizações da fila e aplica na UI (thread principal).
-
-        Chamado via root.after(100) — sempre na thread principal do Tkinter.
-        """
         with self._ui_lock:
             updates = dict(self._ui_updates)
             self._ui_updates.clear()
@@ -429,11 +410,6 @@ class EyeMouseApp:
             if "face_detected" in updates:
                 face_det = updates["face_detected"]
                 app_state = self.state_machine.state
-                status_text = (
-                    f"Estado: {app_state.name} | "
-                    f"Rosto: {'✓' if face_det else '✗'}"
-                )
-                # Tenta chamar update_face_status se o painel suportar
                 if hasattr(self.control_panel, 'update_face_status'):
                     self.control_panel.update_face_status(face_det, app_state.name)
 
@@ -441,134 +417,164 @@ class EyeMouseApp:
             self.root.after(100, self.update_ui_loop)
 
     # ------------------------------------------------------------------
-    # Thread da câmera (produtora)
+    # Thread da Câmera (produtora)
     # ------------------------------------------------------------------
 
     def camera_loop(self):
-        """Thread produtora: captura frames da câmera."""
         consecutive_failures = 0
-        MAX_FAILURES = 30  # ~1 segundo a 30 FPS
+        MAX_FAILURES = 30
 
         while self.running:
-            t0 = time.perf_counter_ns()
-            ret, frame = self.cap.read()
-            elapsed_ns = time.perf_counter_ns() - t0
+            if self.camera_capture:
+                # Utiliza CameraCapture com buffer mínimo
+                packet = self.camera_capture.get_latest_frame(timeout=0.1)
+                if packet is None:
+                    continue
 
-            if not ret:
-                consecutive_failures += 1
-                if consecutive_failures >= MAX_FAILURES:
-                    logger.error("Câmera desconectada ou erro de leitura.")
-                    if FT_SAFETY_RELEASE:
-                        self.mouse_controller.release_all()
-                    self.state_machine.try_transition(AppState.ERROR)
-                    self.root.after(
-                        0,
-                        lambda: messagebox.showerror(
-                            "Erro de Câmera",
-                            "A câmera foi desconectada.\n"
-                            "Verifique a conexão e reinicie o aplicativo.",
-                        ),
-                    )
-                    self.running = False
-                    break
-                time.sleep(0.033)
-                continue
+                self.profiler.record_capture_fps()
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()
+                        self.profiler.record_dropped_frame()
+                    except queue.Empty:
+                        pass
+                self.frame_queue.put(packet)
+            else:
+                # Fallback legado usando cap.read()
+                t0 = time.perf_counter_ns()
+                ret, frame = self.cap.read()
+                elapsed_ns = time.perf_counter_ns() - t0
 
-            consecutive_failures = 0
-            self.profiler._record(FrameProfiler.STAGE_CAPTURE, elapsed_ns)
-            self.profiler.record_capture_fps()
+                if not ret or frame is None:
+                    consecutive_failures += 1
+                    if consecutive_failures >= MAX_FAILURES:
+                        logger.error("Câmera desconectada ou erro de leitura.")
+                        if FT_SAFETY_RELEASE:
+                            self.mouse_controller.release_all()
+                        self.state_machine.try_transition(AppState.ERROR)
+                        self.root.after(
+                            0,
+                            lambda: messagebox.showerror(
+                                "Erro de Câmera",
+                                "A câmera foi desconectada.\nVerifique a conexão e reinicie o aplicativo.",
+                            ),
+                        )
+                        self.running = False
+                        break
+                    time.sleep(0.033)
+                    continue
 
-            # Drop-on-full: manter latência baixa
-            if self.frame_queue.full():
-                try:
-                    self.frame_queue.get_nowait()
-                    self.profiler.record_dropped_frame()
-                except queue.Empty:
-                    pass
-            self.frame_queue.put(frame)
+                consecutive_failures = 0
+                self.profiler._record(FrameProfiler.STAGE_CAPTURE, elapsed_ns)
+                self.profiler.record_capture_fps()
+
+                self._legacy_frame_counter += 1
+                packet = FramePacket(
+                    frame_id=self._legacy_frame_counter,
+                    capture_timestamp=time.perf_counter(),
+                    image=frame,
+                    camera_metadata={},
+                )
+
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()
+                        self.profiler.record_dropped_frame()
+                    except queue.Empty:
+                        pass
+                self.frame_queue.put(packet)
 
     # ------------------------------------------------------------------
-    # Thread de processamento (consumidora)
+    # Thread de Processamento (consumidora)
     # ------------------------------------------------------------------
 
     def processing_loop(self):
-        """Thread consumidora: processa frames e controla o mouse."""
         while self.running:
             try:
-                frame = self.frame_queue.get(timeout=1.0)
+                frame_item = self.frame_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
 
             t_frame_start = time.perf_counter_ns()
             current_time = time.time()
 
-            # -- Pré-processamento --
-            with self.profiler.measure(FrameProfiler.STAGE_PREPROCESS):
-                small_frame = cv2.resize(frame, (320, 240))
-
-            # -- Inferência MediaPipe --
-            with self.profiler.measure(FrameProfiler.STAGE_INFERENCE):
-                left_iris, right_iris, landmarks = self.gaze_tracker.process_frame(
-                    small_frame
+            if isinstance(frame_item, FramePacket):
+                packet = frame_item
+            else:
+                self._legacy_frame_counter += 1
+                packet = FramePacket(
+                    frame_id=self._legacy_frame_counter,
+                    capture_timestamp=time.perf_counter(),
+                    image=frame_item,
+                    camera_metadata={},
                 )
 
-            face_detected = left_iris is not None and right_iris is not None
+            # 1. Inferência MediaPipe (modo VIDEO com timestamp monotônico)
+            with self.profiler.measure(FrameProfiler.STAGE_INFERENCE):
+                raw_result = self.gaze_tracker.process_frame_packet(packet)
 
-            # -- Atualizar frame para CalibrationUI --
-            if landmarks:
-                self.gaze_tracker.draw_debug(frame, landmarks)
+            # 2. Validação temporal e período de estabilização pós-perda
+            if FT_TRACKING_VALIDATOR:
+                result = self.validator.validate(raw_result)
+            else:
+                result = raw_result
+
+            face_detected = result.tracking_valid
+            landmarks = result.landmarks
+
+            # 3. Gerenciamento do preview visual desacoplado
+            if landmarks and DEBUG_DRAW:
+                self.gaze_tracker.draw_debug(packet.image, landmarks)
+
+            now_perf = time.perf_counter()
+            if SHOW_PREVIEW and (now_perf - self._last_preview_render_time >= (1.0 / max(PREVIEW_FPS, 1))):
+                self._last_preview_render_time = now_perf
                 with self.data_lock:
-                    self.latest_frame = frame.copy()
+                    self.latest_frame = packet.image.copy()
+                    self.latest_preview_frame = packet.image.copy()
 
-            # -- Detecção de rosto perdido --
+            # 4. Transição de estado ao perder ou recuperar rosto
             if face_detected:
                 self.last_face_time = current_time
-                # Recuperar de TRACKING_LOST se rosto voltou
-                if (FT_STATE_MACHINE and
-                        self.state_machine.state == AppState.TRACKING_LOST):
+                if (FT_STATE_MACHINE and self.state_machine.state == AppState.TRACKING_LOST):
                     self.state_machine.try_transition(AppState.ACTIVE)
                     self.mouse_controller.reset_smoothing()
             else:
-                # Verificar timeout de rastreamento
                 time_since_face = current_time - self.last_face_time
                 if (FT_STATE_MACHINE and
                         self.state_machine.state == AppState.ACTIVE and
                         time_since_face > TRACKING_LOST_TIMEOUT_SEC):
                     self.state_machine.try_transition(AppState.TRACKING_LOST)
 
-            # -- Extração de features e mapeamento --
+            # 5. Controle do mouse — apenas se rastreamento for válido, NÃO expirado e estabilizado
             if face_detected:
-                with self.profiler.measure(FrameProfiler.STAGE_FEATURES):
-                    avg_iris = (left_iris + right_iris) / 2.0
-                    with self.data_lock:
-                        self.latest_gaze_raw = avg_iris
-                        self.latest_gaze_timestamp = current_time
+                avg_iris = result.features.get("avg_iris")
+                with self.data_lock:
+                    self.latest_gaze_raw = avg_iris
+                    self.latest_gaze_timestamp = current_time
+                    self.latest_valid_observation = result
 
-                # -- Controle do mouse (apenas no estado ACTIVE) --
                 mouse_allowed = (
                     self.state_machine.mouse_allowed
                     if FT_STATE_MACHINE
                     else (not self.is_paused and not self.is_calibrating)
                 )
 
-                if mouse_allowed:
-                    # Mapeamento gaze → tela
+                # Bloqueio estrito: frames expirados ou em estabilização NÃO movem nem clicam
+                can_act = mouse_allowed and result.is_stabilized and not result.is_expired(MAX_OBSERVATION_AGE_SEC)
+
+                if can_act:
                     with self.profiler.measure(FrameProfiler.STAGE_MAPPING):
                         screen_pos = self.calibration_manager.map_to_screen(avg_iris)
 
-                    # Suavização e movimento
                     if screen_pos and not self.blink_detector.is_calibrating:
                         sx, sy = screen_pos
-                        with self.profiler.measure(FrameProfiler.STAGE_SMOOTHING):
-                            # move() aplica o filtro internamente
-                            pass
-
                         with self.profiler.measure(FrameProfiler.STAGE_MOUSE):
                             if not BENCHMARK_MODE:
                                 self.mouse_controller.move(sx, sy)
 
-                    # Detecção de piscadas
-                    img_h, img_w = frame.shape[:2]
+                    # Detecção e injeção de piscadas/gestos
+                    img_h, img_w = packet.image.shape[:2]
                     l_blink, r_blink, d_blink, hold_start, hold_end, ears = (
                         self.blink_detector.process(landmarks, img_w, img_h)
                     )
@@ -587,13 +593,14 @@ class EyeMouseApp:
                 else:
                     ears = (0.0, 0.0)
 
-                # -- Publicar atualização de UI (sem root.after acumulativo) --
                 current_thresh = self.blink_detector.ear_threshold
                 self._post_ui_update("left_ear", ears[0] if len(ears) > 0 else 0.0)
                 self._post_ui_update("right_ear", ears[1] if len(ears) > 1 else 0.0)
                 self._post_ui_update("threshold", current_thresh)
+            else:
+                with self.data_lock:
+                    self.latest_valid_observation = None
 
-            # -- FPS e métricas de frame --
             t_frame_total = time.perf_counter_ns() - t_frame_start
             self.profiler._record(FrameProfiler.STAGE_TOTAL, t_frame_total)
             self.profiler.record_process_fps(face_detected=face_detected)

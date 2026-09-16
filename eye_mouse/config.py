@@ -67,12 +67,46 @@ def get_user_data_dir():
 USER_DATA_DIR = get_user_data_dir()
 
 # ---------------------------------------------------------------------------
-# Câmera
+# ---------------------------------------------------------------------------
+# Câmera (Milestone 2)
 # ---------------------------------------------------------------------------
 CAMERA_INDEX = 0
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 TARGET_FPS = 30
+CAMERA_BACKEND = "DSHOW"         # "DSHOW" (DirectShow), "MSMF" (Media Foundation), "ANY"
+CAMERA_FOURCC = "MJPG"           # "MJPG", "YUY2", None
+CAMERA_BUFFER_SIZE = 1           # Buffer interno mínimo para baixa latência
+CAMERA_AUTOFOCUS = None          # True, False ou None para manter padrão
+CAMERA_EXPOSURE = None           # Float ou None para exposição automática
+
+# Resolução de processamento do MediaPipe (não downscale forçado para 320x240)
+PROCESSING_WIDTH = 640
+PROCESSING_HEIGHT = 480
+
+# ---------------------------------------------------------------------------
+# MediaPipe FaceLandmarker (Milestone 2)
+# ---------------------------------------------------------------------------
+MEDIAPIPE_RUNNING_MODE = "VIDEO" # "VIDEO" (detect_for_video), "IMAGE" ou "LIVE_STREAM"
+MEDIAPIPE_MIN_DETECTION_CONFIDENCE = 0.5
+MEDIAPIPE_MIN_PRESENCE_CONFIDENCE = 0.5
+MEDIAPIPE_MIN_TRACKING_CONFIDENCE = 0.5
+MEDIAPIPE_BLENDSHAPES = False             # Desativar para economizar CPU
+MEDIAPIPE_TRANSFORMATION_MATRICES = False # Desativar para economizar CPU
+
+# ---------------------------------------------------------------------------
+# Validade Temporal e Estabilização (Milestone 2)
+# ---------------------------------------------------------------------------
+MAX_OBSERVATION_AGE_SEC = 0.150       # 150ms: observação mais velha não move cursor nem clica
+TRACKING_STABILIZATION_FRAMES = 5     # Frames consecutivos após retorno para reativar gestos
+TRACKING_STABILIZATION_TIME_SEC = 0.2 # Tempo mínimo contínuo de rastreamento pós-recuperação
+
+# ---------------------------------------------------------------------------
+# Visualização e Preview Otimizado (Milestone 2)
+# ---------------------------------------------------------------------------
+SHOW_PREVIEW = True                   # Preview da câmera opcional
+PREVIEW_FPS = 15                      # Frequência de renderização da UI (desacoplada do tracking)
+DEBUG_DRAW = False                    # Evita desenhar landmarks quando debug não estiver em foco
 
 # ---------------------------------------------------------------------------
 # Suavização do cursor
@@ -127,11 +161,14 @@ MODEL_FILE = "face_landmarker.task"
 # ---------------------------------------------------------------------------
 # Feature Flags — defina como False para reverter cada mudança individualmente
 # ---------------------------------------------------------------------------
-FT_NATIVE_MOUSE    = True   # M1.1: usar OsMouse (SendInput) em vez de pyautogui
-FT_SAFETY_RELEASE  = True   # M1.2: release_all() em pausas/erros/encerramento
-FT_STATE_MACHINE   = True   # M1.3: máquina de estados AppState
-FT_JSON_CALIBRATION = True  # M3.4: persistência JSON (vs .npy com pickle)
-FT_HOLDOUT_VALIDATION = True  # M3.2: validação com holdout separado
+FT_NATIVE_MOUSE       = True   # M1.1: usar OsMouse (SendInput) em vez de pyautogui
+FT_SAFETY_RELEASE     = True   # M1.2: release_all() em pausas/erros/encerramento
+FT_STATE_MACHINE      = True   # M1.3: máquina de estados AppState
+FT_VIDEO_MODE         = True   # M2.1: MediaPipe RunningMode.VIDEO
+FT_LATEST_FRAME_QUEUE = True   # M2.2: Buffer mínimo latest frame com descarte
+FT_TRACKING_VALIDATOR = True   # M2.3: Validação temporal e período de estabilização
+FT_JSON_CALIBRATION   = True   # M3.4: persistência JSON (vs .npy com pickle)
+FT_HOLDOUT_VALIDATION = True   # M3.2: validação com holdout separado
 
 # ---------------------------------------------------------------------------
 # Modo Benchmark
