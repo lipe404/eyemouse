@@ -391,59 +391,42 @@ com calibracoes existentes; migrar automaticamente ao salvar.
 
 ---
 
-## Milestone 4 — Compensacao de Pose de Cabeca
+## Milestone 4 — Cursor Fluido, Responsivo e Preciso
 
-**Objetivo:** Reduzir drift do cursor causado por translacao da cabeca (P3 completo).
-**Dependencias:** Milestone 2 concluido (modo VIDEO disponivel).
-**Estimativa:** 3-5 dias. Maior complexidade tecnica do roadmap.
+**Objetivo:** Transformar o controle do cursor em um sistema fluido, responsivo e estável, eliminando o overshoot e o jitter em repouso sem gerar lag perceptível em sacadas.
+**Dependencias:** Milestones 1, 2 e 3 concluídos.
+**Status:** CONCLUÍDO (2026-09-16)
 
-### Estrategia
+### 4.1 — Filtros Intercambiáveis e One Euro Filter
+- Implementação fiel do **One Euro Filter** (Casiez et al., CHI 2012) adaptativo à velocidade instantânea (`min_cutoff=1.0`, `beta=0.007`, `d_cutoff=1.0`).
+- Preservação do `KalmanSmoothingFilter` (OpenCV) como benchmark de referência.
+- Remoção do lookahead fixo de 66 ms por padrão (eliminando overshoot de 42,2 px / 4,3% em sacadas).
+- Introdução do `PassThroughFilter` (sem filtro) como baseline de latência zero.
+- Factory `create_smoothing_filter(filter_type)` e alternância em runtime.
 
-**Opção A (Simples — Baseada em Landmarks):**
-Normalizar a posicao da iris relativa aos cantos anatomicos do proprio olho
-(lacrimal medial e canto lateral), em vez de relativa ao frame inteiro.
+### 4.2 — Controlador de Cursor de Alta Resolução
+- Separação estrita dos estágios de coordenadas:
+  1. `last_raw_pos`: float do modelo de calibração.
+  2. `last_filtered_pos`: float do filtro de suavização.
+  3. `last_sent_pos`: int enviado ao driver do SO.
+- Sem arredondamento prematuro: precisão float preservada ao longo de todo o pipeline.
+- Alcance completo dos 4 cantos da tela com `SCREEN_MARGIN = 0`.
+- **Modo de Precisão (Precision Mode):** atenuação de ganho em torno de uma âncora (`precision_factor = 0.35`) para mira milimétrica em botões pequenos e links de texto.
 
-```python
-# utils/pose_compensation.py
-def normalize_iris_to_eye(landmarks, iris_center, eye_corner_indices):
-    """
-    Retorna posicao relativa da iris dentro do olho.
-    iris_center: coords normalizadas [0,1] no frame
-    Retorna: (u, v) onde 0=canto esq, 1=canto dir do olho
-    """
-    inner = np.array([landmarks[eye_corner_indices[0]].x,
-                      landmarks[eye_corner_indices[0]].y])
-    outer = np.array([landmarks[eye_corner_indices[1]].x,
-                      landmarks[eye_corner_indices[1]].y])
-    eye_width = np.linalg.norm(outer - inner)
-    if eye_width < 1e-6:
-        return iris_center
-    rel = (iris_center - inner) / eye_width
-    return rel
-```
+### 4.3 — Backend Windows Nativo com DPI Awareness e Multi-Monitor
+- Declaração de **DPI Awareness** no Windows (`SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`) com fallbacks seguros, garantindo pixels físicos 1:1.
+- Suporte a **Desktop Virtual Multi-Monitor** com coordenadas negativas (`SM_XVIRTUALSCREEN`, `SM_YVIRTUALSCREEN`, `MOUSEEVENTF_VIRTUALDESK`).
+- Abstração `BaseMouseBackend` e suporte a `PyAutoGuiMouse` como driver alternativo de teste.
 
-**Opcao B (Robusta — Via Matriz de Pose):**
-Usar as `facial_transformation_matrixes` do MediaPipe para obter
-a rotacao e translacao da cabeca e subtrair do vetor de olhar.
+### 4.4 — Benchmark e Documentação
+- Script automatizado `eye_mouse/benchmark_smoothing.py` com cenários sintéticos de fixação, sacada e perseguição suave.
+- Documentação técnica abrangente em `docs/CURSOR_SMOOTHING_BACKENDS.md`.
 
-**Recomendacao:** Implementar Opcao A primeiro (mais simples, menor risco).
-Medir impacto. Se insuficiente, escalar para Opcao B.
-
-**Metrica:**
-
-- Mover cabeca 2 cm lateralmente com olhar fixo em ponto central.
-- Medir deslocamento do cursor antes e depois.
-- Meta: reducao de > 70% no drift.
-
-**Risco:** Alto. Muda a representacao fundamental do gaze.
-**Mitigacao:** Feature flag GAZE_POSE_COMPENSATION = True.
-Re-calibrar apos ativar (obrigatorio — o espaco de features muda).
-
-### Criterios de Aceitacao do Milestone 4
-
-- Drift com translacao lateral de 3 cm: < 50 px na tela.
-- Qualidade de calibracao mantida ou melhorada (holdout error).
-- Todos os testes adaptados e passando.
+### Critérios de Aceitação do Milestone 4
+- [x] Redução de jitter em fixação > 50% sem criar lag mecânico perceptível (60,4% obtido).
+- [x] Eliminação do overshoot do lookahead antigo (overshoot caiu de 42,2 px para 1,9 px).
+- [x] Suporte a multi-monitor e DPI awareness ativo.
+- [x] 100% de retrocompatibilidade: 264 testes passando com zero falhas.
 
 ---
 

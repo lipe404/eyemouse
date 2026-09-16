@@ -109,10 +109,22 @@ PREVIEW_FPS = 15                      # Frequência de renderização da UI (des
 DEBUG_DRAW = False                    # Evita desenhar landmarks quando debug não estiver em foco
 
 # ---------------------------------------------------------------------------
-# Suavização do cursor
+# Suavização do cursor (Milestone 4)
 # ---------------------------------------------------------------------------
-EMA_ALPHA = 0.10       # 0.0 = máximo suave, 1.0 = sem suavização
-DEAD_ZONE_PIXELS = 5   # Deslocamento mínimo para mover cursor (pixels)
+SMOOTHING_FILTER_TYPE = "ONE_EURO"   # "ONE_EURO", "KALMAN", "NONE"
+ONE_EURO_MIN_CUTOFF = 1.0            # Frequência de corte mínima em Hz (repouso / fixação)
+ONE_EURO_BETA = 0.007                # Coeficiente de resposta dinâmica à velocidade
+ONE_EURO_D_CUTOFF = 1.0              # Frequência de corte da derivada de velocidade em Hz
+ONE_EURO_ENABLE_DEADZONE = False     # Zona morta adaptativa com histerese (opcional)
+
+EMA_ALPHA = 0.10                     # 0.0 = máximo suave, 1.0 = sem suavização (Kalman/legado)
+DEAD_ZONE_PIXELS = 5                 # Deslocamento mínimo para mover cursor (pixels legado)
+
+# Modo de Precisão (Milestone 4)
+PRECISION_MODE_FACTOR = 0.35         # Multiplicador de sensibilidade em modo precisão (0.35 = 35% do ganho normal)
+
+# Driver / Backend de Mouse (Milestone 4)
+MOUSE_BACKEND = "SENDINPUT"          # "SENDINPUT" (nativo Win32 SendInput) ou "PYAUTOGUI"
 
 # ---------------------------------------------------------------------------
 # Piscada — parâmetros baseados em TEMPO REAL (não em frames)
@@ -169,6 +181,9 @@ FT_LATEST_FRAME_QUEUE = True   # M2.2: Buffer mínimo latest frame com descarte
 FT_TRACKING_VALIDATOR = True   # M2.3: Validação temporal e período de estabilização
 FT_JSON_CALIBRATION   = True   # M3.4: persistência JSON (vs .npy com pickle)
 FT_HOLDOUT_VALIDATION = True   # M3.2: validação com holdout separado
+FT_ONE_EURO_FILTER    = True   # M4.1: usar OneEuroFilter como padrão
+FT_DPI_AWARENESS      = True   # M4.4: declarar DPI awareness no Windows
+FT_VIRTUAL_DESKTOP    = True   # M4.4: suporte a desktop virtual multi-monitor
 
 # ---------------------------------------------------------------------------
 # Modo Benchmark
@@ -176,3 +191,4 @@ FT_HOLDOUT_VALIDATION = True   # M3.2: validação com holdout separado
 # Quando True: roda todo o pipeline mas NÃO move o cursor real.
 # Use para medir latência de software sem interferir no sistema operacional.
 BENCHMARK_MODE = False
+
