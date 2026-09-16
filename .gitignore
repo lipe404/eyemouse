@@ -21,3 +21,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 *.spec
+venv/
+venv
+venv/*
