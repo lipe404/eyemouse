@@ -390,6 +390,8 @@ class OsMouse(BaseMouseBackend):
         """
         ax = int(((x - self._vx) * 65535) / max(self._vw - 1, 1))
         ay = int(((y - self._vy) * 65535) / max(self._vh - 1, 1))
+        ax = max(0, min(65535, ax))
+        ay = max(0, min(65535, ay))
         return ax, ay
 
     def _mi(

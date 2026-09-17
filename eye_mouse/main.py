@@ -11,6 +11,7 @@ Otimizações do Milestone 2:
 """
 from __future__ import annotations
 
+import atexit
 import cv2
 import threading
 import time
@@ -90,6 +91,7 @@ class EyeMouseApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()
+        self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
 
         # --- Perfil de usuário ---
         raw_profile = simpledialog.askstring(
@@ -149,6 +151,10 @@ class EyeMouseApp:
             self.blink_detector = BlinkDetector()
             self.calibration_manager = CalibrationManager(profile_name=self.user_profile)
             self.mouse_controller = MouseController()
+            self.calibration_manager.adapt_screen_resolution(
+                self.mouse_controller.screen_w, self.mouse_controller.screen_h
+            )
+            atexit.register(self.mouse_controller.release_all)
             logger.info("Módulos inicializados. Perfil: %s", self.user_profile)
         except Exception as exc:
             logger.error("Erro ao inicializar módulos: %s", exc)
@@ -609,8 +615,10 @@ class EyeMouseApp:
         logger.info("Encerrando aplicação...")
         self.running = False
 
-        if FT_SAFETY_RELEASE:
+        try:
             self.mouse_controller.release_all()
+        except Exception:
+            pass
 
         if self.action_bar:
             try:
@@ -638,17 +646,49 @@ class EyeMouseApp:
             pass
 
         if self.camera_capture:
-            self.camera_capture.release()
+            try:
+                self.camera_capture.release()
+            except Exception:
+                pass
         elif self.cap and self.cap.isOpened():
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+
+        # Desbloqueia fila caso a thread de processamento esteja aguardando em get()
+        try:
+            if self.frame_queue.full():
+                try:
+                    self.frame_queue.get_nowait()
+                except Exception:
+                    pass
+            self.frame_queue.put_nowait(None)
+        except Exception:
+            pass
+
+        # Aguarda término ordenado das threads
+        if hasattr(self, "camera_thread") and self.camera_thread and self.camera_thread.is_alive():
+            self.camera_thread.join(timeout=1.0)
+        if hasattr(self, "processing_thread") and self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.join(timeout=1.0)
 
         # Fechar explicitamente o MediaPipe
-        self.gaze_tracker.close()
+        try:
+            self.gaze_tracker.close()
+        except Exception:
+            pass
 
         report = self.profiler.report()
         logger.info("Relatório de benchmark:\n%s", report)
 
-        self.root.quit()
+        try:
+            self.root.destroy()
+        except Exception:
+            try:
+                self.root.quit()
+            except Exception:
+                pass
         sys.exit(0)
 
     # ------------------------------------------------------------------
@@ -711,8 +751,24 @@ class EyeMouseApp:
                 # Utiliza CameraCapture com buffer mínimo
                 packet = self.camera_capture.get_latest_frame(timeout=0.1)
                 if packet is None:
+                    consecutive_failures += 1
+                    is_connected = getattr(self.camera_capture, "is_connected", True)
+                    if consecutive_failures >= MAX_FAILURES or not is_connected:
+                        logger.error("Câmera desconectada ou falha contínua no CameraCapture.")
+                        self.mouse_controller.release_all()
+                        self.state_machine.try_transition(AppState.ERROR)
+                        self.root.after(
+                            0,
+                            lambda: messagebox.showerror(
+                                "Erro de Câmera",
+                                "A câmera foi desconectada.\nVerifique a conexão e reinicie o aplicativo.",
+                            ),
+                        )
+                        self.running = False
+                        break
                     continue
 
+                consecutive_failures = 0
                 self.profiler.record_capture_fps()
                 if self.frame_queue.full():
                     try:
@@ -731,8 +787,7 @@ class EyeMouseApp:
                     consecutive_failures += 1
                     if consecutive_failures >= MAX_FAILURES:
                         logger.error("Câmera desconectada ou erro de leitura.")
-                        if FT_SAFETY_RELEASE:
-                            self.mouse_controller.release_all()
+                        self.mouse_controller.release_all()
                         self.state_machine.try_transition(AppState.ERROR)
                         self.root.after(
                             0,
@@ -776,6 +831,9 @@ class EyeMouseApp:
                 frame_item = self.frame_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
+
+            if frame_item is None:
+                break
 
             t_frame_start = time.perf_counter_ns()
             current_time = time.time()

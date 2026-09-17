@@ -102,9 +102,11 @@ class CalibrationManager:
         self.trim_x: float = 0.0
         self.trim_y: float = 0.0
 
-        # Resolução de tela registrada
+        # Resolução de tela registrada e fatores de escala dinâmicos
         self.calibrated_screen_w: int = 1920
         self.calibrated_screen_h: int = 1080
+        self._scale_x: float = 1.0
+        self._scale_y: float = 1.0
 
     def _create_model(self, model_name: str) -> BaseCalibrationModel:
         if model_name == "linear":
@@ -294,18 +296,43 @@ class CalibrationManager:
     # Mapeamento
     # ------------------------------------------------------------------
 
+    def is_resolution_compatible(self, current_w: int, current_h: int) -> bool:
+        """Verifica se a resolução atual coincide com a resolução da calibração."""
+        return self.calibrated_screen_w == current_w and self.calibrated_screen_h == current_h
+
+    def adapt_screen_resolution(self, current_w: int, current_h: int) -> bool:
+        """
+        Ajusta proporcionalmente o mapeamento caso a resolução de tela mude após a calibração.
+        Retorna True se houve ajuste de escala, False se permaneceu idêntico.
+        """
+        if current_w <= 0 or current_h <= 0 or self.calibrated_screen_w <= 0 or self.calibrated_screen_h <= 0:
+            return False
+        if not self.is_resolution_compatible(current_w, current_h):
+            self._scale_x = float(current_w) / float(self.calibrated_screen_w)
+            self._scale_y = float(current_h) / float(self.calibrated_screen_h)
+            logger.info(
+                "Resolução alterada de %dx%d para %dx%d. Fatores de adaptação: sx=%.3f, sy=%.3f",
+                self.calibrated_screen_w, self.calibrated_screen_h, current_w, current_h,
+                self._scale_x, self._scale_y
+            )
+            return True
+        else:
+            self._scale_x = 1.0
+            self._scale_y = 1.0
+            return False
+
     def map_to_screen(
         self, iris_pos: Tuple[float, float]
     ) -> Optional[Tuple[int, int]]:
-        """Mapeia coordenadas do olhar para pixels da tela, aplicando trim."""
+        """Mapeia coordenadas do olhar para pixels da tela, aplicando trim e adaptação de resolução."""
         if not self.is_calibrated or not self.model.is_fitted:
             return None
 
         x_arr = np.array(iris_pos, dtype=np.float64)
         try:
             pred = self.model.predict(x_arr)
-            sx = int(round(pred[0] + self.trim_x))
-            sy = int(round(pred[1] + self.trim_y))
+            sx = int(round((pred[0] + self.trim_x) * getattr(self, "_scale_x", 1.0)))
+            sy = int(round((pred[1] + self.trim_y) * getattr(self, "_scale_y", 1.0)))
             return sx, sy
         except Exception as exc:
             logger.error("Erro na predição de coordenadas: %s", exc)

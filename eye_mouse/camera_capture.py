@@ -1,4 +1,4 @@
-﻿"""
+"""
 camera_capture.py — Abstração de captura de câmera de baixa latência para Windows.
 
 Características:
@@ -275,6 +275,14 @@ class CameraCapture:
     @property
     def captured_frames(self) -> int:
         return self._captured_frames
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and bool(self._thread and self._thread.is_alive())
+
+    @property
+    def is_connected(self) -> bool:
+        return self.is_running and bool(self.cap and self.cap.isOpened())
 
 
 def probe_camera_configurations(camera_index: int = 0) -> Dict[str, Any]:

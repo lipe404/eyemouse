@@ -263,6 +263,13 @@ class ControlPanel:
             fill="x", pady=4
         )
 
+        # Diagnóstico e Benchmark Local
+        diag_box = ttk.LabelFrame(tab, text="Diagnóstico & Benchmark", padding="8")
+        diag_box.pack(fill="x", pady=4)
+        ttk.Button(diag_box, text="Gerar Relatório de Diagnóstico", command=self._generate_diagnostics).pack(
+            fill="x", pady=2
+        )
+
         # Aviso Legal de Tecnologia Assistiva
         disc_label = ttk.Label(
             tab,
@@ -380,6 +387,24 @@ class ControlPanel:
     def _on_clear_data(self) -> None:
         if self.on_clear_data:
             self.on_clear_data()
+
+    def _generate_diagnostics(self) -> None:
+        """Executa e exporta diagnóstico local em JSON e Markdown."""
+        try:
+            from diagnostics import run_diagnostics, save_diagnostic_report
+            rep = run_diagnostics()
+            _, md_path = save_diagnostic_report(rep)
+            messagebox.showinfo(
+                "Diagnóstico Gerado",
+                f"Relatório de diagnóstico gerado com sucesso!\n\nSalvo em:\n{md_path}",
+                parent=self.window,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erro",
+                f"Falha ao gerar diagnóstico: {exc}",
+                parent=self.window,
+            )
 
     # ------------------------------------------------------------------
     # Atualizações Periódicas de Status

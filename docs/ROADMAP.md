@@ -521,6 +521,25 @@ com calibracoes existentes; migrar automaticamente ao salvar.
 
 ---
 
+## Milestone 7 — Validação Final e Release Candidate
+
+**Objetivo:** Auditoria completa, testes de integração determinísticos sem hardware, ferramenta de diagnóstico reproduzível, roteiro de testes manuais, empacotamento com PyInstaller e documentação de release.
+**Status:** CONCLUÍDO (2026-09-17)
+
+### Tarefas Concluídas
+- [x] Auditoria geral de código (deadlocks, threads órfãs, clamping de coordenadas em `OsMouse`, tratamento de desconexão de câmera).
+- [x] Garantia anti-travamento de mouse via gancho global `atexit` e protocolo `WM_DELETE_WINDOW`.
+- [x] Adaptação dinâmica de resolução no `CalibrationManager` (`is_resolution_compatible` e `adapt_screen_resolution`).
+- [x] 7 testes de integração ponta a ponta com `SimulatedClock` e `MockMouseDriver` (`tests/test_integration_pipeline.py`).
+- [x] Módulo e ferramenta de diagnóstico de sistema e benchmarks (`eye_mouse/diagnostics.py`).
+- [x] Botão de diagnóstico integrado ao Painel de Controle (aba Privacidade & Perfis).
+- [x] Roteiro formal de testes manuais com 14 cenários operacionais e recuperação ambiental (`docs/MANUAL_TESTING.md`).
+- [x] Empacotamento compilado validado via PyInstaller em modo onedir e onefile (`build_exe.py`).
+- [x] Relatório final de auditoria e liberação (`docs/RELEASE_AUDIT.md`).
+- [x] Suíte expandida para 359 testes automatizados com 100% de aprovação em ~5.5s.
+
+---
+
 ## Tabela de Metricas por Milestone
 
 | Milestone | Metrica Principal            | Meta                   | Como Medir                     |
